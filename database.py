@@ -51,6 +51,20 @@ def init_db():
             FOREIGN KEY (activity_id) REFERENCES activities (id)
         )
     """)
+
+    # New To-Do / Quests Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            status TEXT DEFAULT 'Planning',
+            completed_year INTEGER,
+            completed_week INTEGER,
+            completed_at TIMESTAMP,
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     
     conn.commit()
     conn.close()
@@ -125,14 +139,23 @@ def get_current_week_logs(year: int, week: int):
         logs[(r[0], r[1])] = (r[2], r[3])
     return logs
 
+# Gamification calculations (Including Quest XP Bonus!)
 def get_user_xp_and_level():
     conn = get_connection()
     cursor = conn.cursor()
+    # Habit score points
     cursor.execute("SELECT SUM(score) FROM daily_logs WHERE score IS NOT NULL")
-    res = cursor.fetchone()[0]
+    res = cursor.fetchone()[0] or 0
+    habit_xp = res * 10
+    
+    # Completed quests bonus (+50 XP each)
+    cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Complete' AND active = 1")
+    completed_tasks = cursor.fetchone()[0] or 0
+    quest_xp = completed_tasks * 50
+
     conn.close()
     
-    total_xp = (res or 0) * 10
+    total_xp = habit_xp + quest_xp
     level = (total_xp // 100) + 1
     xp_in_level = total_xp % 100
     return total_xp, level, xp_in_level
@@ -179,7 +202,6 @@ def get_current_streak():
     return streak
 
 def get_past_weeks_scores(num_weeks=6):
-    """Returns [(year, week, avg_score), ...] for the last `num_weeks` recorded."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -195,7 +217,6 @@ def get_past_weeks_scores(num_weeks=6):
     return rows[-num_weeks:] if rows else []
 
 def get_weekly_insights(year: int, week: int):
-    """Computes completion rates, vice control %, category averages, and hero/nemesis habits."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -220,14 +241,12 @@ def get_weekly_insights(year: int, week: int):
     completed_logs = sum(1 for r in rows if r[4] > 0)
     completion_rate = (completed_logs / total_logs) * 100.0 if total_logs else 0.0
 
-    # Vice resistance rate
     vice_rows = [r for r in rows if r[2] == 1]
     vice_rate = None
     if vice_rows:
         resisted = sum(1 for r in vice_rows if r[3] == "Resisted")
         vice_rate = (resisted / len(vice_rows)) * 100.0
 
-    # Category breakdown (normalized to % of maximum possible score)
     cat_points = {}
     for r in rows:
         cat = r[1]
@@ -239,7 +258,6 @@ def get_weekly_insights(year: int, week: int):
         for cat, scores in cat_points.items()
     }
 
-    # Habit averages for Strongest vs Nemesis
     habit_scores = {}
     for r in rows:
         name = r[0]
@@ -257,6 +275,65 @@ def get_weekly_insights(year: int, week: int):
         "strongest_habit": strongest,
         "nemesis_habit": nemesis
     }
+
+# --- Tasks / To-Do Database Operations ---
+def get_tasks():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, status, completed_year, completed_week 
+        FROM tasks 
+        WHERE active = 1 
+        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, id DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def add_task(title: str, status: str = "Planning"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO tasks (title, status) VALUES (?, ?)", (title, status))
+    task_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return task_id
+
+def update_task_status(task_id: int, status: str, year: int, week: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    if status == "Complete":
+        cursor.execute("""
+            UPDATE tasks 
+            SET status = ?, completed_year = ?, completed_week = ?, completed_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        """, (status, year, week, task_id))
+    else:
+        cursor.execute("""
+            UPDATE tasks 
+            SET status = ?, completed_year = NULL, completed_week = NULL, completed_at = NULL 
+            WHERE id = ?
+        """, (status, task_id))
+    conn.commit()
+    conn.close()
+
+def delete_task(task_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE tasks SET active = 0 WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+
+def get_weekly_completed_tasks_count(year: int, week: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) FROM tasks 
+        WHERE active = 1 AND status = 'Complete' AND completed_year = ? AND completed_week = ?
+    """, (year, week))
+    count = cursor.fetchone()[0] or 0
+    conn.close()
+    return count
 
 def export_to_csv():
     desktop_dir = Path.home() / "Desktop"

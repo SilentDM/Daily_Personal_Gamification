@@ -2,19 +2,17 @@ import flet as ft
 import database as db
 from schedule_view import ScheduleView
 from graphs_view import GraphsView
+from todo_view import TodoView
 
 def main(page: ft.Page):
-    # App Window Setup
     page.title = "Personal Gamification Tracker"
     page.theme_mode = ft.ThemeMode.DARK
     page.window.width = 1320
     page.window.height = 840
     page.padding = 0
 
-    # Initialize Database
     db.init_db()
 
-    # Pre-seed default activities if the table is empty
     if not db.get_activities():
         initial_tasks = [
             "Workout / Gym", "Stretching", "Healthy Diet",
@@ -23,23 +21,29 @@ def main(page: ft.Page):
         for task in initial_tasks:
             db.add_activity(task)
 
-    # Initialize Views
+    # Views
     schedule_view = ScheduleView(page)
     graphs_view = GraphsView(page)
+    todo_view = TodoView(page)
 
-    # Tab navigation handler
     def on_nav_change(e):
         idx = e.control.selected_index
+        # Toggle visibility
+        schedule_view.visible = (idx == 0)
+        graphs_view.visible = (idx == 1)
+        todo_view.visible = (idx == 2)
+
         if idx == 0:
-            schedule_view.visible = True
-            graphs_view.visible = False
+            schedule_view.render()
+            schedule_view.calculate_daily_scores()
         elif idx == 1:
-            schedule_view.visible = False
             graphs_view.refresh()
-            graphs_view.visible = True
+        elif idx == 2:
+            todo_view.render()
+
         page.update()
 
-    # Navigation Sidebar
+    # 3-Tab Navigation Rail
     rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
@@ -56,6 +60,11 @@ def main(page: ft.Page):
                 selected_icon=ft.Icons.BAR_CHART,
                 label="Graphs"
             ),
+            ft.NavigationRailDestination(
+                icon=ft.Icons.CHECKLIST_OUTLINED,
+                selected_icon=ft.Icons.CHECKLIST,
+                label="Quests"
+            ),
         ],
         on_change=on_nav_change
     )
@@ -66,7 +75,8 @@ def main(page: ft.Page):
                 rail,
                 ft.VerticalDivider(width=1),
                 schedule_view,
-                graphs_view
+                graphs_view,
+                todo_view
             ],
             expand=True
         )

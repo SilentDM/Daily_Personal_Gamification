@@ -28,6 +28,10 @@ LEVEL_TITLES = [
     (15, "Ascended")
 ]
 
+# --- To-Do / Quest Stages & Bonus ---
+TASK_STAGES = ["Planning", "Started", "In Progress", "Almost There", "Complete"]
+QUEST_BONUS_XP = 50  # XP awarded upon reaching 'Complete'
+
 def get_rank_title(level: int) -> str:
     title = "Novice"
     for req_lvl, name in LEVEL_TITLES:
