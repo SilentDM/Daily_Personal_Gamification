@@ -3,6 +3,7 @@ import os
 import csv
 from pathlib import Path
 from datetime import datetime, date
+from constants import get_rank_title
 
 def get_db_path():
     app_data = os.getenv("APPDATA")
@@ -22,13 +23,24 @@ def init_db():
     cursor = conn.cursor()
     
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS activities (
+        CREATE TABLE IF NOT EXISTS study_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT DEFAULT 'Routine',
-            is_negative INTEGER DEFAULT 0,
+            topic TEXT NOT NULL,
+            source TEXT DEFAULT 'FIAP / Alura',
+            eli5 TEXT DEFAULT '',
+            code_sandbox TEXT DEFAULT '',
+            break_test TEXT DEFAULT '',
+            recall_questions TEXT DEFAULT '',
+            status TEXT DEFAULT 'In Progress',
             active INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hud_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
     """)
     
@@ -141,24 +153,52 @@ def get_current_week_logs(year: int, week: int):
 
 # Gamification calculations (Including Quest XP Bonus!)
 def get_user_xp_and_level():
+    """
+    Calculates dynamic Discipline Level (1 to 100).
+    - Level 100 = 1,000 Total XP (100 net perfect days).
+    - Each day's net XP = (Daily_Average - 5.0) * 2.
+    - Levels decrease on underperforming days (< 5.0).
+    """
     conn = get_connection()
     cursor = conn.cursor()
-    # Habit score points
-    cursor.execute("SELECT SUM(score) FROM daily_logs WHERE score IS NOT NULL")
-    res = cursor.fetchone()[0] or 0
-    habit_xp = res * 10
     
-    # Completed quests bonus (+50 XP each)
+    # 1. Query daily average scores for all recorded days
+    cursor.execute("""
+        SELECT l.year, l.week_number, l.day_of_week, AVG(l.score)
+        FROM daily_logs l
+        JOIN activities a ON l.activity_id = a.id
+        WHERE a.active = 1 AND l.score IS NOT NULL
+        GROUP BY l.year, l.week_number, l.day_of_week
+    """)
+    day_rows = cursor.fetchall()
+    
+    net_habit_xp = 0.0
+    for y, w, d, avg in day_rows:
+        daily_delta = (avg - 5.0) * 2.0
+        net_habit_xp += daily_delta
+
+    # 2. Completed Quests bonus (+15 XP towards discipline pool)
     cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Complete' AND active = 1")
-    completed_tasks = cursor.fetchone()[0] or 0
-    quest_xp = completed_tasks * 50
+    quest_xp = (cursor.fetchone()[0] or 0) * 15.0
+
+    # 3. Mastered Study Chapters bonus (+15 XP towards discipline pool)
+    cursor.execute("SELECT COUNT(*) FROM study_sessions WHERE status = 'Mastered' AND active = 1")
+    study_xp = (cursor.fetchone()[0] or 0) * 15.0
 
     conn.close()
-    
-    total_xp = habit_xp + quest_xp
-    level = (total_xp // 100) + 1
-    xp_in_level = total_xp % 100
-    return total_xp, level, xp_in_level
+
+    # Total discipline XP clamped between 0.0 and 1,000.0
+    total_xp = max(0.0, min(1000.0, net_habit_xp + quest_xp + study_xp))
+
+    if total_xp >= 1000.0:
+        level = 100
+        xp_in_level = 10.0
+    else:
+        level = max(1, int(total_xp // 10) + 1)
+        xp_in_level = total_xp % 10.0
+
+    rank_title = get_rank_title(level)
+    return total_xp, level, xp_in_level, rank_title
 
 def get_current_streak():
     conn = get_connection()
@@ -361,3 +401,74 @@ def export_to_csv():
             writer.writerow([r[0], r[1], "Yes" if r[2] else "No", r[3], r[4], day_str, r[6], r[7]])
 
     return str(file_path)
+
+def get_study_sessions():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, topic, source, eli5, code_sandbox, break_test, recall_questions, status, created_at 
+        FROM study_sessions 
+        WHERE active = 1 
+        ORDER BY CASE WHEN status = 'In Progress' THEN 0 ELSE 1 END ASC, id DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def add_study_session(topic: str, source: str = "FIAP"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO study_sessions (topic, source) VALUES (?, ?)",
+        (topic, source)
+    )
+    session_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return session_id
+
+def update_study_session(session_id: int, topic: str, source: str, eli5: str, code_sandbox: str, break_test: str, recall_questions: str, status: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE study_sessions 
+        SET topic = ?, source = ?, eli5 = ?, code_sandbox = ?, break_test = ?, recall_questions = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (topic, source, eli5, code_sandbox, break_test, recall_questions, status, session_id))
+    conn.commit()
+    conn.close()
+
+def delete_study_session(session_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE study_sessions SET active = 0 WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+
+def get_hud_settings():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT key, value FROM hud_settings")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    defaults = {
+        "position": "Top-Right",
+        "bg_mode": "Pure Black (Minimalist)",
+        "accent_color": "Cyan",
+        "show_quests": "true",
+        "show_score": "true",
+        "show_xp_bar": "true"
+    }
+    defaults.update(dict(rows))
+    return defaults
+
+def set_hud_setting(key: str, value: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO hud_settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()

@@ -1,5 +1,6 @@
 import flet as ft
 import database as db
+from wallpaper import update_desktop_wallpaper
 from constants import TASK_STAGES, QUEST_BONUS_XP
 
 STAGE_COLORS = {
@@ -21,6 +22,7 @@ class TodoView(ft.Column):
         new_status = e.control.value
         db.update_task_status(task_id, new_status, self.year, self.week)
         self.render()
+        update_desktop_wallpaper()
 
     def on_delete_task(self, task_id):
         db.delete_task(task_id)

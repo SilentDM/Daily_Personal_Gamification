@@ -1,5 +1,6 @@
 import flet as ft
 import database as db
+from wallpaper import update_desktop_wallpaper
 from constants import (
     POSITIVE_SCORES, 
     NEGATIVE_SCORES, 
@@ -32,15 +33,18 @@ class ScheduleView(ft.Column):
         self.calculate_daily_scores()
 
     def update_gamification_stats(self):
-        """Updates the Streak, Level, and XP bar."""
+        """Updates the Streak, Level (1-100), and XP progress."""
         streak = db.get_current_streak()
-        total_xp, level, xp_in_level = db.get_user_xp_and_level()
-        rank_title = get_rank_title(level)
+        total_xp, level, xp_in_level, rank_title = db.get_user_xp_and_level()
 
         self.streak_text.value = f"🔥 {streak} Day{'s' if streak != 1 else ''} Streak"
-        self.level_text.value = f"Level {level} • {rank_title}"
-        self.xp_bar.value = xp_in_level / 100.0
-        self.xp_fraction_text.value = f"{xp_in_level} / 100 XP (Total: {total_xp})"
+        self.level_text.value = f"Level {level} / 100 • {rank_title}"
+        self.xp_bar.value = min(xp_in_level / 10.0, 1.0)
+        
+        if level >= 100:
+            self.xp_fraction_text.value = "MAX LEVEL REACHED! (1,000 XP)"
+        else:
+            self.xp_fraction_text.value = f"{xp_in_level:.1f} / 10 XP to Lvl {level + 1} (Total: {total_xp:.1f} / 1000)"
 
     def calculate_daily_scores(self):
         logs = db.get_current_week_logs(self.year, self.week)
@@ -75,6 +79,8 @@ class ScheduleView(ft.Column):
         score = score_map.get(selected_status)
         db.save_log(activity_id, self.year, self.week, day_idx, selected_status, score)
         self.calculate_daily_scores()
+        update_desktop_wallpaper()
+                
 
     def on_delete_activity(self, activity_id):
         db.delete_activity(activity_id)
@@ -95,6 +101,7 @@ class ScheduleView(ft.Column):
 
         self.render()
         self.calculate_daily_scores()
+        update_desktop_wallpaper()
 
     def export_csv_clicked(self, e):
         path = db.export_to_csv()

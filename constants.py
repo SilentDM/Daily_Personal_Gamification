@@ -19,22 +19,22 @@ CATEGORIES = ["Health", "Study", "Routine", "Vice / Avoid"]
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-LEVEL_TITLES = [
-    (0, "Novice"),
-    (2, "Apprentice"),
-    (4, "Consistent"),
-    (7, "Disciplined"),
-    (10, "Habit Master"),
-    (15, "Ascended")
-]
-
-# --- To-Do / Quest Stages & Bonus ---
 TASK_STAGES = ["Planning", "Started", "In Progress", "Almost There", "Complete"]
-QUEST_BONUS_XP = 50  # XP awarded upon reaching 'Complete'
 
+# Quest Bonus XP (matches the 1-100 level discipline scale)
+QUEST_BONUS_XP = 15
+
+# 1-100 Level Rank Tiers
 def get_rank_title(level: int) -> str:
-    title = "Novice"
-    for req_lvl, name in LEVEL_TITLES:
-        if level >= req_lvl:
-            title = name
-    return title
+    if level >= 100:
+        return "Centurion"
+    elif level >= 81:
+        return "Master"
+    elif level >= 61:
+        return "Elite"
+    elif level >= 36:
+        return "Disciplined"
+    elif level >= 16:
+        return "Apprentice"
+    else:
+        return "Novice"
