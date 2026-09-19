@@ -16,6 +16,7 @@ class WallpaperView(ft.Column):
         db.set_hud_setting("show_score", "true" if self.score_check.value else "false")
         db.set_hud_setting("show_xp_bar", "true" if self.xp_check.value else "false")
         db.set_hud_setting("show_studies", "true" if self.studies_check.value else "false")
+        db.set_hud_setting("show_calendar", "true" if self.calendar_check.value else "false")
         
         update_desktop_wallpaper()
         
@@ -84,17 +85,24 @@ class WallpaperView(ft.Column):
         )
         self.controls.append(pos_card)
 
-        # 2. Content Toggles Card
+        # 2. Content Toggles Card (Now with Calendar toggle!)
         self.score_check = ft.Checkbox(label="Show Daily Score & Streak", value=(settings.get("show_score", "true") == "true"))
         self.xp_check = ft.Checkbox(label="Show Level & XP Bar", value=(settings.get("show_xp_bar", "true") == "true"))
         self.quests_check = ft.Checkbox(label="Show Active Quests", value=(settings.get("show_quests", "true") == "true"))
         self.studies_check = ft.Checkbox(label="Show In-Progress Studies", value=(settings.get("show_studies", "true") == "true"))
+        self.calendar_check = ft.Checkbox(label="Show Upcoming Calendar", value=(settings.get("show_calendar", "true") == "true"))
 
         content_card = ft.Container(
             content=ft.Column([
                 ft.Text("What to Display on the HUD", size=16, weight=ft.FontWeight.BOLD),
                 ft.Text("Toggle which widgets appear inside your wallpaper card:", color=ft.Colors.GREY_400, size=13),
-                ft.Row([self.score_check, self.xp_check, self.quests_check, self.studies_check], spacing=20, wrap=True),
+                ft.Row([
+                    self.score_check, 
+                    self.xp_check, 
+                    self.quests_check, 
+                    self.studies_check,
+                    self.calendar_check
+                ], spacing=20, wrap=True),
             ], spacing=10),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
             border_radius=10,

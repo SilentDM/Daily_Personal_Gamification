@@ -44,6 +44,18 @@ def init_db():
         )
     """)
     
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            event_date TEXT NOT NULL, -- YYYY-MM-DD
+            start_hour INTEGER NOT NULL, -- 0 to 23
+            recurrence TEXT DEFAULT 'none', -- 'none', 'weekly', 'monthly'
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
     cursor.execute("PRAGMA table_info(activities)")
     cols = [info[1] for info in cursor.fetchall()]
     if "category" not in cols:
@@ -459,7 +471,8 @@ def get_hud_settings():
         "show_quests": "true",
         "show_studies": "true",
         "show_score": "true",
-        "show_xp_bar": "true"
+        "show_xp_bar": "true",
+        "show_calendar": "true"
     }
     defaults.update(dict(rows))
     return defaults
@@ -473,3 +486,64 @@ def set_hud_setting(key: str, value: str):
     """, (key, value))
     conn.commit()
     conn.close()
+    
+# --- Calendar Database Operations ---
+def add_calendar_event(title: str, event_date_str: str, start_hour: int, recurrence: str = "none"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO calendar_events (title, event_date, start_hour, recurrence)
+        VALUES (?, ?, ?, ?)
+    """, (title, event_date_str, start_hour, recurrence))
+    event_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return event_id
+
+def delete_calendar_event(event_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE calendar_events SET active = 0 WHERE id = ?", (event_id,))
+    conn.commit()
+    conn.close()
+
+def get_events_for_date(target_date: date):
+    """Fetches all events (one-time, weekly, monthly) valid on the target_date."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, event_date, start_hour, recurrence 
+        FROM calendar_events 
+        WHERE active = 1 AND event_date <= ?
+        ORDER BY start_hour ASC
+    """, (target_date.strftime("%Y-%m-%d"),))
+    rows = cursor.fetchall()
+    conn.close()
+
+    matching_events = []
+    for r in rows:
+        eid, title, start_date_str, hour, rec = r
+        start_d = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+
+        if rec == "none" and start_d == target_date:
+            matching_events.append(r)
+        elif rec == "weekly" and start_d.weekday() == target_date.weekday():
+            matching_events.append(r)
+        elif rec == "monthly" and start_d.day == target_date.day:
+            matching_events.append(r)
+
+    return matching_events
+
+def get_upcoming_events(limit=3):
+    """Fetches upcoming events for the next 14 days (for HUD display)."""
+    today = date.today()
+    upcoming = []
+
+    for i in range(14):
+        check_date = date.fromordinal(today.toordinal() + i)
+        day_events = get_events_for_date(check_date)
+        for ev in day_events:
+            upcoming.append((check_date, ev[1], ev[3], ev[4]))
+            if len(upcoming) >= limit:
+                return upcoming
+    return upcoming

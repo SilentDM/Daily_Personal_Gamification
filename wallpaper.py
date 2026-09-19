@@ -62,6 +62,7 @@ def update_desktop_wallpaper():
         year, week, today_idx = db.get_current_week_info()
         logs = db.get_current_week_logs(year, week)
         active_ids = {a[0] for a in db.get_activities()}
+        upcoming_events = db.get_upcoming_events(limit=3)
         
         today_scores = [
             score for (act_id, day), (_, score) in logs.items() 
@@ -81,6 +82,7 @@ def update_desktop_wallpaper():
         show_studies = settings.get("show_studies", "true") == "true"
         show_score = settings.get("show_score", "true") == "true"
         show_xp_bar = settings.get("show_xp_bar", "true") == "true"
+        show_calendar = settings.get("show_calendar", "true") == "true"
         accent = COLOR_PALETTES.get(settings.get("accent_color", "Amber / Gold"), COLOR_PALETTES["Amber / Gold"])
 
         # 2. Pre-calculate wrapped lines so the box height fits perfectly
@@ -111,6 +113,8 @@ def update_desktop_wallpaper():
             hud_h += 38 + (len(quest_lines) * 22)
         if show_studies:
             hud_h += 38 + (len(study_lines) * 22)
+        if show_calendar and upcoming_events:
+            hud_h += 38 + (len(upcoming_events) * 22)
 
         margin_x = 70
         margin_y = 60
@@ -193,6 +197,19 @@ def update_desktop_wallpaper():
             for line in study_lines:
                 draw.text((x1 + 25, curr_y), line, fill=(220, 240, 255, 255), font=font_body)
                 curr_y += 22
+        # UPCOMING calendar events
+        if show_calendar and upcoming_events:
+            draw.line([x1 + 25, curr_y + 4, x2 - 25, curr_y + 4], fill=(50, 60, 75, 255), width=1)
+            draw.text((x1 + 25, curr_y + 12), "UPCOMING CALENDAR:", fill=(255, 200, 100, 255), font=font_sub)
+            curr_y += 32
+
+            for ev_date, ev_title, ev_hour, ev_rec in upcoming_events:
+                clean_title = (ev_title[:32] + "...") if len(ev_title) > 32 else ev_title
+                ev_line = f"• [{ev_date.strftime('%d/%m')} {ev_hour:02d}:00] {clean_title}"
+                draw.text((x1 + 25, curr_y), ev_line, fill=(240, 240, 240, 255), font=font_body)
+                curr_y += 22
+
+
 
         # Save & Set Windows Wallpaper
         final_img = Image.alpha_composite(base_img, overlay).convert("RGB")
