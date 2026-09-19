@@ -2,6 +2,38 @@ import flet as ft
 import database as db
 from wallpaper import update_desktop_wallpaper
 
+# Default pre-written template text
+DEFAULT_ELI5 = """• What is it?
+-> 
+
+• What problem does it solve?
+-> 
+
+• Real-world analogy / Simple metaphor:
+-> """
+
+DEFAULT_CODE = """# 2. Minimal Proof of Work Example
+# (Write from scratch from memory, not copied from the video)
+
+def proof_of_work():
+    pass
+"""
+
+DEFAULT_BREAK = """• If I remove or change [X], what error happens?
+-> 
+
+• When should I NOT use this?
+-> 
+
+• Common edge cases & pitfalls:
+-> """
+
+DEFAULT_RECALL = """Q1: 
+A1: 
+
+Q2: 
+A2: """
+
 class StudyView(ft.Row):
     def __init__(self, page: ft.Page):
         super().__init__(expand=True, spacing=0, visible=False)
@@ -12,7 +44,12 @@ class StudyView(ft.Row):
         self.topic_list_column = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
         
         # Right panel: Form inputs
-        self.topic_title_input = ft.TextField(label="Topic / Chapter Title", text_size=15, dense=True)
+        self.topic_title_input = ft.TextField(
+            label="Topic / Chapter Title", 
+            text_size=15, 
+            dense=True,
+            expand=True  # Expands to fill available top header space
+        )
         self.source_dropdown = ft.Dropdown(
             label="Course / Source",
             value="FIAP",
@@ -36,47 +73,50 @@ class StudyView(ft.Row):
             width=200,
             dense=True
         )
+
+        # Full-width text areas with generous default height
         self.eli5_input = ft.TextField(
             label="1. The ELI5 Summary (Explain in simple terms without jargon)",
-            hint_text="• What is it?\n• What problem does it solve?\n• Real-world analogy...",
             multiline=True,
-            min_lines=3,
-            max_lines=5,
+            min_lines=6,
+            max_lines=None,
             text_size=13
         )
         self.code_input = ft.TextField(
             label="2. The Toy Sandbox (Proof of Work code example)",
-            hint_text="# Write minimal code from scratch. Do not copy-paste instructor's code.",
             multiline=True,
-            min_lines=5,
-            max_lines=8,
+            min_lines=7,
+            max_lines=None,
             text_size=12,
             text_style=ft.TextStyle(font_family="Consolas")
         )
         self.break_input = ft.TextField(
             label="3. The Break-It Test (Edge cases & common failures)",
-            hint_text="• What error occurs if this is removed or misused?\n• When should I NOT use this?",
             multiline=True,
-            min_lines=3,
-            max_lines=5,
+            min_lines=6,
+            max_lines=None,
             text_size=13
         )
         self.recall_input = ft.TextField(
             label="4. Active Recall Flashcard (Test for future self)",
-            hint_text="Q1: ...\nA1: ...\n\nQ2: ...\nA2: ...",
             multiline=True,
-            min_lines=3,
-            max_lines=5,
+            min_lines=6,
+            max_lines=None,
             text_size=13
         )
 
-        self.editor_container = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=12)
+        # STRETCH horizontal alignment ensures 100% screen-width expansion
+        self.editor_container = ft.Column(
+            scroll=ft.ScrollMode.AUTO, 
+            expand=True, 
+            spacing=14,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+        )
         
         self.build_layout()
         self.refresh_list()
 
     def build_layout(self):
-        # Left Panel (Sidebar for Study Notes)
         new_topic_field = ft.TextField(hint_text="New chapter name...", expand=True, dense=True, text_size=13)
         
         def add_topic_clicked(e):
@@ -113,11 +153,10 @@ class StudyView(ft.Row):
             bgcolor=ft.Colors.SURFACE_CONTAINER_LOW
         )
 
-        # Right Panel (The Template Workspace)
         right_workspace = ft.Container(
             content=self.editor_container,
             expand=True,
-            padding=20
+            padding=ft.Padding.only(left=20, right=30, top=15, bottom=30)
         )
 
         self.controls = [
@@ -166,7 +205,6 @@ class StudyView(ft.Row):
             )
             self.topic_list_column.controls.append(tile)
 
-        # If no item is selected, load the first item
         if self.selected_session_id is None and sessions:
             self.load_session(sessions[0][0])
         elif self.selected_session_id:
@@ -189,10 +227,12 @@ class StudyView(ft.Row):
         self.topic_title_input.value = topic
         self.source_dropdown.value = source
         self.status_dropdown.value = "Mastered (+30 XP)" if status == "Mastered" else "In Progress"
-        self.eli5_input.value = eli5
-        self.code_input.value = code
-        self.break_input.value = break_t
-        self.recall_input.value = recall
+
+        # Pre-populate with default instructions if empty, otherwise load saved notes
+        self.eli5_input.value = eli5 if (eli5 and eli5.strip()) else DEFAULT_ELI5
+        self.code_input.value = code if (code and code.strip()) else DEFAULT_CODE
+        self.break_input.value = break_t if (break_t and break_t.strip()) else DEFAULT_BREAK
+        self.recall_input.value = recall if (recall and recall.strip()) else DEFAULT_RECALL
 
         def save_clicked(e):
             clean_status = "Mastered" if "Mastered" in self.status_dropdown.value else "In Progress"
@@ -214,6 +254,7 @@ class StudyView(ft.Row):
             db.delete_study_session(self.selected_session_id)
             self.selected_session_id = None
             self.refresh_list()
+            update_desktop_wallpaper()
 
         self.editor_container.controls = [
             ft.Row([
@@ -231,7 +272,7 @@ class StudyView(ft.Row):
                     tooltip="Delete Chapter",
                     on_click=delete_clicked
                 )
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, spacing=10),
             ft.Divider(color=ft.Colors.GREY_800),
             ft.Text("Proof of Work Study Template", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
             self.eli5_input,
