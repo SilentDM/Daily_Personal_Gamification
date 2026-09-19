@@ -1,5 +1,6 @@
 import flet as ft
 import database as db
+from wallpaper import update_desktop_wallpaper
 
 class StudyView(ft.Row):
     def __init__(self, page: ft.Page):
@@ -207,6 +208,7 @@ class StudyView(ft.Row):
             )
             e.control.content = "Saved!"
             self.refresh_list()
+            update_desktop_wallpaper()
 
         def delete_clicked(e):
             db.delete_study_session(self.selected_session_id)

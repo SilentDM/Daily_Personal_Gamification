@@ -454,9 +454,10 @@ def get_hud_settings():
     
     defaults = {
         "position": "Top-Right",
-        "bg_mode": "Pure Black (Minimalist)",
-        "accent_color": "Cyan",
+        "bg_mode": "Custom Image (base_wallpaper.jpg)",
+        "accent_color": "Amber / Gold",
         "show_quests": "true",
+        "show_studies": "true",
         "show_score": "true",
         "show_xp_bar": "true"
     }
