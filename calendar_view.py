@@ -84,6 +84,11 @@ class CalendarView(ft.Column):
         self.render()
         update_desktop_wallpaper()
 
+    def toggle_done(self, event_id: int, date_str: str):
+        db.toggle_event_completion(event_id, date_str)
+        self.render()
+        update_desktop_wallpaper()
+
     def render(self):
         self.controls.clear()
         if self.mode == "month":
@@ -254,6 +259,7 @@ class CalendarView(ft.Column):
             events_by_hour.setdefault(ev[3], []).append(ev)
 
         hours_column = ft.Column(spacing=4)
+        date_str = self.selected_date.strftime("%Y-%m-%d")
 
         for h in range(24):
             is_active_selection = (h == self.scheduling_hour)
@@ -277,10 +283,33 @@ class CalendarView(ft.Column):
                 for ev in hour_events:
                     eid, title, _, _, rec = ev
                     rec_badge = f" • [{rec.capitalize()}]" if rec != "none" else ""
+                    is_done = db.is_event_completed(eid, date_str)
+
+                    def make_toggle(event_id=eid, d_str=date_str):
+                        return lambda e: self.toggle_done(event_id, d_str)
+
                     event_items.append(
                         ft.Row([
-                            ft.Icon(ft.Icons.EVENT, size=16, color=ft.Colors.AMBER_ACCENT),
-                            ft.Text(f"{title}{rec_badge}", size=13, weight=ft.FontWeight.W_500, expand=True),
+                            ft.IconButton(
+                                icon=ft.Icons.CHECK_CIRCLE if is_done else ft.Icons.RADIO_BUTTON_UNCHECKED,
+                                icon_color=ft.Colors.GREEN_ACCENT if is_done else ft.Colors.AMBER_ACCENT,
+                                tooltip="Mark as Done (+10 XP)" if not is_done else "Completed!",
+                                on_click=make_toggle()
+                            ),
+                            ft.Text(
+                                f"{title}{rec_badge}", 
+                                size=13, 
+                                weight=ft.FontWeight.W_500, 
+                                color=ft.Colors.GREY_400 if is_done else ft.Colors.WHITE,
+                                style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_done else ft.TextDecoration.NONE),
+                                expand=True
+                            ),
+                            ft.Container(
+                                content=ft.Text("+10 XP", size=10, color=ft.Colors.GREEN_ACCENT, weight=ft.FontWeight.BOLD),
+                                bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.GREEN),
+                                border_radius=4,
+                                padding=ft.Padding.symmetric(horizontal=6, vertical=2)
+                            ) if is_done else ft.Container(),
                             ft.IconButton(
                                 ft.Icons.DELETE_OUTLINE,
                                 icon_size=18,

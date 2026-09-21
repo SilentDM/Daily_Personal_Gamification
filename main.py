@@ -1,9 +1,12 @@
 import flet as ft
 import database as db
 import threading
+import time
 import os
 import ctypes
 import pystray
+import winsound
+from datetime import datetime, date
 from PIL import Image, ImageDraw
 from wallpaper import update_desktop_wallpaper
 
@@ -16,28 +19,23 @@ from calendar_view import CalendarView
 
 APP_TITLE = "Personal Gamification Tracker"
 
-# Global Tray flags
 TRAY_INITIALIZED = False
 tray_icon_instance = None
+NOTIFIED_ALARMS = set()  # Cache so we don't repeat notifications: (event_id, date_str, "15m" or "0m")
 
 def get_window_hwnd():
-    """Finds the native Windows HWND handle using the window title."""
     return ctypes.windll.user32.FindWindowW(None, APP_TITLE)
 
 def hide_window_to_tray():
-    """Tells Windows to completely remove the window from screen and taskbar."""
     hwnd = get_window_hwnd()
     if hwnd:
-        ctypes.windll.user32.ShowWindow(hwnd, 0)  # 0 = SW_HIDE
+        ctypes.windll.user32.ShowWindow(hwnd, 0)
 
 def restore_window_from_tray(page: ft.Page):
-    """Restores the window directly to maximized state and brings it to front."""
     hwnd = get_window_hwnd()
     if hwnd:
-        ctypes.windll.user32.ShowWindow(hwnd, 3)  # 3 = SW_MAXIMIZE
+        ctypes.windll.user32.ShowWindow(hwnd, 3)
         ctypes.windll.user32.SetForegroundWindow(hwnd)
-    
-    # Sync Flet's internal window state
     page.window.maximized = True
     page.update()
 
@@ -58,7 +56,6 @@ def main(page: ft.Page):
     page.window.maximized = True
     page.padding = 0
 
-    # 1. Close-to-Tray: Intercept 'X' and execute native Windows SW_HIDE
     page.window.prevent_close = True
 
     def on_window_event(e):
@@ -111,7 +108,6 @@ def main(page: ft.Page):
 
         page.update()
 
-    # 5-Tab Navigation Rail
     rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
@@ -146,7 +142,7 @@ def main(page: ft.Page):
 
     update_desktop_wallpaper()
 
-    # 2. System Tray Handlers
+    # --- System Tray Handlers ---
     def show_window(icon, item):
         restore_window_from_tray(page)
 
@@ -160,20 +156,98 @@ def main(page: ft.Page):
 
     if not TRAY_INITIALIZED:
         TRAY_INITIALIZED = True
-
         tray_menu = pystray.Menu(
             pystray.MenuItem("Open Tracker", show_window, default=True),
             pystray.MenuItem("Refresh Wallpaper", force_refresh_wallpaper),
             pystray.MenuItem("Exit", quit_app)
         )
-
-        tray_icon_instance = pystray.Icon(
-            "GamificationTracker",
-            create_tray_icon_image(),
-            APP_TITLE,
-            menu=tray_menu
-        )
-
+        tray_icon_instance = pystray.Icon("GamificationTracker", create_tray_icon_image(), APP_TITLE, menu=tray_menu)
         threading.Thread(target=tray_icon_instance.run, daemon=True).start()
+
+    # --- Background Calendar Alarm Daemon ---
+    def show_alarm_dialog(title_text: str, subtitle: str, event_id: int, date_str: str):
+        def mark_done(e):
+            db.toggle_event_completion(event_id, date_str)
+            if hasattr(page, "close"):
+                page.close(dlg)
+            else:
+                dlg.open = False
+            calendar_view.render()
+            schedule_view.update_gamification_stats()
+            update_desktop_wallpaper()
+            page.update()
+
+        def dismiss(e):
+            if hasattr(page, "close"):
+                page.close(dlg)
+            else:
+                dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Row([
+                ft.Icon(ft.Icons.ALARM, color=ft.Colors.AMBER_ACCENT, size=28),
+                ft.Text(title_text, weight=ft.FontWeight.BOLD)
+            ], spacing=10),
+            content=ft.Column([
+                ft.Text(subtitle, size=14, color=ft.Colors.WHITE),
+                ft.Text("Marking as completed awards +10 XP towards your Discipline Level!", size=12, color=ft.Colors.GREEN_ACCENT)
+            ], tight=True, spacing=8),
+            actions=[
+                ft.Button("Dismiss", on_click=dismiss),
+                ft.Button("I Did It! (+10 XP)", icon=ft.Icons.CHECK, on_click=mark_done)
+            ]
+        )
+        if hasattr(page, "open"):
+            page.open(dlg)
+        else:
+            page.dialog = dlg
+            dlg.open = True
+            page.update()
+
+    def reminder_loop():
+        while True:
+            time.sleep(20)  # Check every 20 seconds
+            try:
+                today = date.today()
+                today_str = today.strftime("%Y-%m-%d")
+                events = db.get_events_for_date(today)
+                now = datetime.now()
+
+                for ev in events:
+                    eid, title, _, hour, _ = ev
+                    event_dt = datetime(today.year, today.month, today.day, hour, 0, 0)
+                    delta_sec = (event_dt - now).total_seconds()
+                    delta_min = delta_sec / 60.0
+
+                    # 1. 15-minute warning (between 13 and 16 mins before)
+                    if 13.0 <= delta_min <= 16.0:
+                        key = (eid, today_str, "15m")
+                        if key not in NOTIFIED_ALARMS:
+                            NOTIFIED_ALARMS.add(key)
+                            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                            restore_window_from_tray(page)
+                            show_alarm_dialog(
+                                "⏰ Upcoming Appointment (in 15m)",
+                                f"'{title}' is scheduled for {hour:02d}:00!",
+                                eid, today_str
+                            )
+
+                    # 2. Starting Now warning (between -2 and +3 mins)
+                    elif -2.0 <= delta_min <= 3.0:
+                        key = (eid, today_str, "0m")
+                        if key not in NOTIFIED_ALARMS:
+                            NOTIFIED_ALARMS.add(key)
+                            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                            restore_window_from_tray(page)
+                            show_alarm_dialog(
+                                "🚨 Event Starting NOW!",
+                                f"'{title}' starts now ({hour:02d}:00)!",
+                                eid, today_str
+                            )
+            except Exception as ex:
+                print(f"Reminder loop error: {ex}")
+
+    threading.Thread(target=reminder_loop, daemon=True).start()
 
 ft.run(main)

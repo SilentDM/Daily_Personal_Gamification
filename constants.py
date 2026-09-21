@@ -22,7 +22,7 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 TASK_STAGES = ["Planning", "Started", "In Progress", "Almost There", "Complete"]
 
 # Quest Bonus XP (matches the 1-100 level discipline scale)
-QUEST_BONUS_XP = 15
+QUEST_BONUS_XP = 20
 
 # 1-100 Level Rank Tiers
 def get_rank_title(level: int) -> str:

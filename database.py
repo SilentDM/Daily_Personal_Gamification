@@ -55,6 +55,20 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS event_completions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER,
+            completion_date TEXT, -- YYYY-MM-DD
+            completed INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(event_id, completion_date)
+        )
+    """)
+    cursor.execute("PRAGMA table_info(tasks)")
+    task_cols = [info[1] for info in cursor.fetchall()]
+    if "notes" not in task_cols:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''")
     
     cursor.execute("PRAGMA table_info(activities)")
     cols = [info[1] for info in cursor.fetchall()]
@@ -170,6 +184,7 @@ def get_user_xp_and_level():
     - Level 100 = 1,000 Total XP (100 net perfect days).
     - Each day's net XP = (Daily_Average - 5.0) * 2.
     - Levels decrease on underperforming days (< 5.0).
+    - Quests (+15 XP), Mastered Studies (+15 XP), and Calendar events (+10 XP) add bonus discipline.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -189,18 +204,20 @@ def get_user_xp_and_level():
         daily_delta = (avg - 5.0) * 2.0
         net_habit_xp += daily_delta
 
-    # 2. Completed Quests bonus (+15 XP towards discipline pool)
+    # 2. Completed Quests bonus (+15 XP each)
     cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Complete' AND active = 1")
     quest_xp = (cursor.fetchone()[0] or 0) * 15.0
 
-    # 3. Mastered Study Chapters bonus (+15 XP towards discipline pool)
+    # 3. Mastered Study Chapters bonus (+15 XP each)
     cursor.execute("SELECT COUNT(*) FROM study_sessions WHERE status = 'Mastered' AND active = 1")
     study_xp = (cursor.fetchone()[0] or 0) * 15.0
+    
+    # 4. Completed Calendar Appointments (+10 XP each)
+    cursor.execute("SELECT COUNT(*) FROM event_completions WHERE completed = 1")
+    event_xp = (cursor.fetchone()[0] or 0) * 10.0
 
-    conn.close()
-
-    # Total discipline XP clamped between 0.0 and 1,000.0
-    total_xp = max(0.0, min(1000.0, net_habit_xp + quest_xp + study_xp))
+    # Total discipline XP clamped between 0.0 and 1,000.0 (All 4 sources included!)
+    total_xp = max(0.0, min(1000.0, net_habit_xp + quest_xp + study_xp + event_xp))
 
     if total_xp >= 1000.0:
         level = 100
@@ -210,6 +227,9 @@ def get_user_xp_and_level():
         xp_in_level = total_xp % 10.0
 
     rank_title = get_rank_title(level)
+    
+    conn.close()
+    
     return total_xp, level, xp_in_level, rank_title
 
 def get_current_streak():
@@ -547,3 +567,51 @@ def get_upcoming_events(limit=3):
             if len(upcoming) >= limit:
                 return upcoming
     return upcoming
+
+# --- Quest Notes Database Operations ---
+def get_tasks():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, status, completed_year, completed_week, COALESCE(notes, '') 
+        FROM tasks 
+        WHERE active = 1 
+        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, id DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def update_task_notes(task_id: int, notes: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE tasks SET notes = ? WHERE id = ?", (notes, task_id))
+    conn.commit()
+    conn.close()
+
+# --- Calendar Event Completion & XP Operations ---
+def toggle_event_completion(event_id: int, date_str: str):
+    """Toggles whether an appointment was completed on that date."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM event_completions WHERE event_id = ? AND completion_date = ?", (event_id, date_str))
+    row = cursor.fetchone()
+
+    if row:
+        cursor.execute("DELETE FROM event_completions WHERE id = ?", (row[0],))
+        is_done = False
+    else:
+        cursor.execute("INSERT INTO event_completions (event_id, completion_date) VALUES (?, ?)", (event_id, date_str))
+        is_done = True
+
+    conn.commit()
+    conn.close()
+    return is_done
+
+def is_event_completed(event_id: int, date_str: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM event_completions WHERE event_id = ? AND completion_date = ?", (event_id, date_str))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
