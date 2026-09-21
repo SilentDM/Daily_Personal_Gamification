@@ -21,7 +21,16 @@ APP_TITLE = "Personal Gamification Tracker"
 
 TRAY_INITIALIZED = False
 tray_icon_instance = None
-NOTIFIED_ALARMS = set()  # Cache so we don't repeat notifications: (event_id, date_str, "15m" or "0m")
+NOTIFIED_ALARMS = set()
+
+def force_exit():
+    """Immediately and cleanly terminates all background threads and processes."""
+    try:
+        if tray_icon_instance:
+            tray_icon_instance.visible = False
+    except Exception:
+        pass
+    os._exit(0)
 
 def get_window_hwnd():
     return ctypes.windll.user32.FindWindowW(None, APP_TITLE)
@@ -56,6 +65,7 @@ def main(page: ft.Page):
     page.window.maximized = True
     page.padding = 0
 
+    # 1. Close-to-Tray: Intercept 'X'
     page.window.prevent_close = True
 
     def on_window_event(e):
@@ -108,6 +118,7 @@ def main(page: ft.Page):
 
         page.update()
 
+    # 6-Tab Navigation Rail with Power-Off button at the bottom
     rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
@@ -121,6 +132,15 @@ def main(page: ft.Page):
             ft.NavigationRailDestination(icon=ft.Icons.WALLPAPER_OUTLINED, selected_icon=ft.Icons.WALLPAPER, label="Wallpaper"),
             ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, selected_icon=ft.Icons.CALENDAR_MONTH, label="Calendar"),
         ],
+        trailing=ft.Container(
+            content=ft.IconButton(
+                icon=ft.Icons.POWER_SETTINGS_NEW,
+                icon_color=ft.Colors.RED_400,
+                tooltip="Quit Application Completely",
+                on_click=lambda e: force_exit()
+            ),
+            padding=ft.Padding.only(bottom=20)
+        ),
         on_change=on_nav_change
     )
 
@@ -142,24 +162,23 @@ def main(page: ft.Page):
 
     update_desktop_wallpaper()
 
-    # --- System Tray Handlers ---
+    # --- System Tray Handlers (Fixed Deadlock) ---
     def show_window(icon, item):
         restore_window_from_tray(page)
 
     def force_refresh_wallpaper(icon, item):
         update_desktop_wallpaper()
 
-    def quit_app(icon, item):
-        if icon:
-            icon.stop()
-        os._exit(0)
+    def quit_from_tray(icon, item):
+        # Trigger force_exit in an independent thread so pystray doesn't deadlock
+        threading.Thread(target=force_exit, daemon=True).start()
 
     if not TRAY_INITIALIZED:
         TRAY_INITIALIZED = True
         tray_menu = pystray.Menu(
             pystray.MenuItem("Open Tracker", show_window, default=True),
             pystray.MenuItem("Refresh Wallpaper", force_refresh_wallpaper),
-            pystray.MenuItem("Exit", quit_app)
+            pystray.MenuItem("Exit", quit_from_tray)
         )
         tray_icon_instance = pystray.Icon("GamificationTracker", create_tray_icon_image(), APP_TITLE, menu=tray_menu)
         threading.Thread(target=tray_icon_instance.run, daemon=True).start()
@@ -207,7 +226,7 @@ def main(page: ft.Page):
 
     def reminder_loop():
         while True:
-            time.sleep(20)  # Check every 20 seconds
+            time.sleep(20)
             try:
                 today = date.today()
                 today_str = today.strftime("%Y-%m-%d")
@@ -220,7 +239,6 @@ def main(page: ft.Page):
                     delta_sec = (event_dt - now).total_seconds()
                     delta_min = delta_sec / 60.0
 
-                    # 1. 15-minute warning (between 13 and 16 mins before)
                     if 13.0 <= delta_min <= 16.0:
                         key = (eid, today_str, "15m")
                         if key not in NOTIFIED_ALARMS:
@@ -233,7 +251,6 @@ def main(page: ft.Page):
                                 eid, today_str
                             )
 
-                    # 2. Starting Now warning (between -2 and +3 mins)
                     elif -2.0 <= delta_min <= 3.0:
                         key = (eid, today_str, "0m")
                         if key not in NOTIFIED_ALARMS:
@@ -246,7 +263,7 @@ def main(page: ft.Page):
                                 eid, today_str
                             )
             except Exception as ex:
-                print(f"Reminder loop error: {ex}")
+                pass
 
     threading.Thread(target=reminder_loop, daemon=True).start()
 
