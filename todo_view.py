@@ -38,8 +38,16 @@ class TodoView(ft.Column):
         self.render()
 
     def save_notes_clicked(self, task_id: int, notes_val: str, btn: ft.Button):
-        db.update_task_notes(task_id, notes_val)
-        btn.content = "Saved!"
+        xp_earned = db.save_task_notes_with_progress(task_id, notes_val)
+        
+        if xp_earned > 0:
+            btn.content = f"Saved! (+{xp_earned:.0f} XP 🔥)"
+            btn.icon = ft.Icons.BOLT
+        else:
+            btn.content = "Saved!"
+            btn.icon = ft.Icons.CHECK
+            
+        update_desktop_wallpaper()
         if self.app_page:
             self.app_page.update()
 

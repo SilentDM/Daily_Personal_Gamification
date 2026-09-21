@@ -65,6 +65,17 @@ def init_db():
             UNIQUE(event_id, completion_date)
         )
     """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quest_progress_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER,
+            xp_awarded REAL DEFAULT 2.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES tasks (id)
+        )
+    """)
+    
     cursor.execute("PRAGMA table_info(tasks)")
     task_cols = [info[1] for info in cursor.fetchall()]
     if "notes" not in task_cols:
@@ -215,9 +226,13 @@ def get_user_xp_and_level():
     # 4. Completed Calendar Appointments (+10 XP each)
     cursor.execute("SELECT COUNT(*) FROM event_completions WHERE completed = 1")
     event_xp = (cursor.fetchone()[0] or 0) * 10.0
+    
+    # 5. Incremental Quest Progress (+2 XP per working session)
+    cursor.execute("SELECT SUM(xp_awarded) FROM quest_progress_logs")
+    note_progress_xp = (cursor.fetchone()[0] or 0.0)
 
-    # Total discipline XP clamped between 0.0 and 1,000.0 (All 4 sources included!)
-    total_xp = max(0.0, min(1000.0, net_habit_xp + quest_xp + study_xp + event_xp))
+    # Sum all 5 sources of discipline:
+    total_xp = max(0.0, min(1000.0, net_habit_xp + quest_xp + study_xp + event_xp + note_progress_xp))
 
     if total_xp >= 1000.0:
         level = 100
@@ -615,3 +630,51 @@ def is_event_completed(event_id: int, date_str: str):
     row = cursor.fetchone()
     conn.close()
     return row is not None
+
+def save_task_notes_with_progress(task_id: int, new_notes: str) -> float:
+    """
+    Saves notes. If notes meaningfully changed and expanded, 
+    awards +2.0 XP towards the discipline pool (max once per 15 min per quest).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # 1. Get old notes
+    cursor.execute("SELECT COALESCE(notes, '') FROM tasks WHERE id = ?", (task_id,))
+    row = cursor.fetchone()
+    old_notes = row[0] if row else ""
+
+    # 2. Update the notes in database
+    cursor.execute("UPDATE tasks SET notes = ? WHERE id = ?", (new_notes, task_id))
+    
+    xp_gained = 0.0
+    new_clean = new_notes.strip()
+    old_clean = old_notes.strip()
+
+    # Check if there is meaningful new content (at least 10 new characters)
+    if len(new_clean) >= len(old_clean) + 10 and new_clean != old_clean:
+        # Check cooldown: has this task received progress XP in the last 15 minutes?
+        cursor.execute("""
+            SELECT created_at FROM quest_progress_logs 
+            WHERE task_id = ? 
+            ORDER BY id DESC LIMIT 1
+        """, (task_id,))
+        last_log = cursor.fetchone()
+
+        can_award = True
+        if last_log and last_log[0]:
+            try:
+                # SQLite timestamp parsing
+                last_time = datetime.strptime(last_log[0].split(".")[0], "%Y-%m-%d %H:%M:%S")
+                if (datetime.now() - last_time).total_seconds() < 900:  # 15 min cooldown
+                    can_award = False
+            except Exception:
+                can_award = True
+
+        if can_award:
+            xp_gained = 2.0
+            cursor.execute("INSERT INTO quest_progress_logs (task_id, xp_awarded) VALUES (?, ?)", (task_id, xp_gained))
+
+    conn.commit()
+    conn.close()
+    return xp_gained
