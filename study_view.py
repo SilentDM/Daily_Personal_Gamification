@@ -2,7 +2,6 @@ import flet as ft
 import database as db
 from wallpaper import update_desktop_wallpaper
 
-# Default pre-written template text
 DEFAULT_ELI5 = """• What is it?
 -> 
 
@@ -40,16 +39,9 @@ class StudyView(ft.Row):
         self.app_page = page
         self.selected_session_id = None
 
-        # Left panel: Topics List
         self.topic_list_column = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
         
-        # Right panel: Form inputs
-        self.topic_title_input = ft.TextField(
-            label="Topic / Chapter Title", 
-            text_size=15, 
-            dense=True,
-            expand=True  # Expands to fill available top header space
-        )
+        self.topic_title_input = ft.TextField(label="Topic / Chapter Title", text_size=15, dense=True, expand=True)
         self.source_dropdown = ft.Dropdown(
             label="Course / Source",
             value="FIAP",
@@ -74,38 +66,11 @@ class StudyView(ft.Row):
             dense=True
         )
 
-        # Full-width text areas with generous default height
-        self.eli5_input = ft.TextField(
-            label="1. The ELI5 Summary (Explain in simple terms without jargon)",
-            multiline=True,
-            min_lines=6,
-            max_lines=None,
-            text_size=13
-        )
-        self.code_input = ft.TextField(
-            label="2. The Toy Sandbox (Proof of Work code example)",
-            multiline=True,
-            min_lines=7,
-            max_lines=None,
-            text_size=12,
-            text_style=ft.TextStyle(font_family="Consolas")
-        )
-        self.break_input = ft.TextField(
-            label="3. The Break-It Test (Edge cases & common failures)",
-            multiline=True,
-            min_lines=6,
-            max_lines=None,
-            text_size=13
-        )
-        self.recall_input = ft.TextField(
-            label="4. Active Recall Flashcard (Test for future self)",
-            multiline=True,
-            min_lines=6,
-            max_lines=None,
-            text_size=13
-        )
+        self.eli5_input = ft.TextField(label="1. The ELI5 Summary (Explain in simple terms without jargon)", multiline=True, min_lines=6, max_lines=None, text_size=13)
+        self.code_input = ft.TextField(label="2. The Toy Sandbox (Proof of Work code example)", multiline=True, min_lines=7, max_lines=None, text_size=12, text_style=ft.TextStyle(font_family="Consolas"))
+        self.break_input = ft.TextField(label="3. The Break-It Test (Edge cases & common failures)", multiline=True, min_lines=6, max_lines=None, text_size=13)
+        self.recall_input = ft.TextField(label="4. Active Recall Flashcard (Test for future self)", multiline=True, min_lines=6, max_lines=None, text_size=13)
 
-        # STRETCH horizontal alignment ensures 100% screen-width expansion
         self.editor_container = ft.Column(
             scroll=ft.ScrollMode.AUTO, 
             expand=True, 
@@ -123,9 +88,7 @@ class StudyView(ft.Row):
             if new_topic_field.value and new_topic_field.value.strip():
                 new_id = db.add_study_session(new_topic_field.value.strip())
                 new_topic_field.value = ""
-                self.selected_session_id = new_id
-                self.refresh_list()
-                self.load_session(new_id)
+                self.select_chapter(new_id)
 
         left_sidebar = ft.Container(
             content=ft.Column([
@@ -165,7 +128,16 @@ class StudyView(ft.Row):
             right_workspace
         ]
 
-    def refresh_list(self):
+    def select_chapter(self, session_id: int):
+        """Immediately loads editor AND updates sidebar highlight."""
+        self.selected_session_id = session_id
+        self.load_editor(session_id)
+        self.render_sidebar_tiles()
+        if self.app_page:
+            self.app_page.update()
+
+    def render_sidebar_tiles(self):
+        """Re-draws sidebar tiles so the active one highlights in real time."""
         self.topic_list_column.controls.clear()
         sessions = db.get_study_sessions()
 
@@ -173,16 +145,12 @@ class StudyView(ft.Row):
             self.topic_list_column.controls.append(
                 ft.Text("No chapters yet.\nAdd one above!", color=ft.Colors.GREY_500, size=13)
             )
-            self.show_empty_editor()
-            if self.app_page:
-                self.app_page.update()
             return
 
         for s in sessions:
             sid, topic, source, _, _, _, _, status, _ = s
             is_selected = (sid == self.selected_session_id)
             is_mastered = (status == "Mastered")
-
             badge_color = ft.Colors.GREEN_ACCENT if is_mastered else ft.Colors.ORANGE_ACCENT
 
             tile = ft.Container(
@@ -201,20 +169,24 @@ class StudyView(ft.Row):
                 bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST if is_selected else ft.Colors.TRANSPARENT,
                 border_radius=8,
                 padding=10,
-                on_click=lambda e, s_id=sid: self.load_session(s_id)
+                on_click=lambda e, s_id=sid: self.select_chapter(s_id)  # Instant selection!
             )
             self.topic_list_column.controls.append(tile)
 
-        if self.selected_session_id is None and sessions:
-            self.load_session(sessions[0][0])
-        elif self.selected_session_id:
-            self.load_session(self.selected_session_id)
+    def refresh_list(self):
+        sessions = db.get_study_sessions()
+        if not sessions:
+            self.show_empty_editor()
+            self.render_sidebar_tiles()
+            return
 
-        if self.app_page:
-            self.app_page.update()
+        if self.selected_session_id is None or not any(s[0] == self.selected_session_id for s in sessions):
+            self.selected_session_id = sessions[0][0]
 
-    def load_session(self, session_id: int):
-        self.selected_session_id = session_id
+        self.render_sidebar_tiles()
+        self.load_editor(self.selected_session_id)
+
+    def load_editor(self, session_id: int):
         sessions = db.get_study_sessions()
         session = next((s for s in sessions if s[0] == session_id), None)
 
@@ -228,7 +200,6 @@ class StudyView(ft.Row):
         self.source_dropdown.value = source
         self.status_dropdown.value = "Mastered (+30 XP)" if status == "Mastered" else "In Progress"
 
-        # Pre-populate with default instructions if empty, otherwise load saved notes
         self.eli5_input.value = eli5 if (eli5 and eli5.strip()) else DEFAULT_ELI5
         self.code_input.value = code if (code and code.strip()) else DEFAULT_CODE
         self.break_input.value = break_t if (break_t and break_t.strip()) else DEFAULT_BREAK
@@ -247,8 +218,10 @@ class StudyView(ft.Row):
                 status=clean_status
             )
             e.control.content = "Saved!"
-            self.refresh_list()
+            self.render_sidebar_tiles()
             update_desktop_wallpaper()
+            if self.app_page:
+                self.app_page.update()
 
         def delete_clicked(e):
             db.delete_study_session(self.selected_session_id)
@@ -281,9 +254,6 @@ class StudyView(ft.Row):
             self.recall_input,
         ]
 
-        if self.app_page:
-            self.app_page.update()
-
     def show_empty_editor(self):
         self.editor_container.controls = [
             ft.Container(
@@ -295,5 +265,3 @@ class StudyView(ft.Row):
                 padding=50
             )
         ]
-        if self.app_page:
-            self.app_page.update()

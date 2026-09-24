@@ -78,11 +78,17 @@ def init_db():
     
     cursor.execute("PRAGMA table_info(tasks)")
     task_cols = [info[1] for info in cursor.fetchall()]
+    if "sort_order" not in task_cols:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0")
+        cursor.execute("UPDATE tasks SET sort_order = id WHERE sort_order = 0 OR sort_order IS NULL")
     if "notes" not in task_cols:
         cursor.execute("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''")
     
     cursor.execute("PRAGMA table_info(activities)")
     cols = [info[1] for info in cursor.fetchall()]
+    if "sort_order" not in cols:
+        cursor.execute("ALTER TABLE activities ADD COLUMN sort_order INTEGER DEFAULT 0")
+        cursor.execute("UPDATE activities SET sort_order = id WHERE sort_order = 0 OR sort_order IS NULL")
     if "category" not in cols:
         cursor.execute("ALTER TABLE activities ADD COLUMN category TEXT DEFAULT 'Routine'")
     if "is_negative" not in cols:
@@ -126,10 +132,36 @@ def get_current_week_info():
 def get_activities():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, category, is_negative FROM activities WHERE active = 1 ORDER BY id ASC")
+    cursor.execute("SELECT id, name, category, is_negative FROM activities WHERE active = 1 ORDER BY sort_order ASC, id ASC")
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def move_activity(activity_id: int, direction: str):
+    """Moves an activity up or down in the display order."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, sort_order FROM activities WHERE active = 1 ORDER BY sort_order ASC, id ASC")
+    rows = cursor.fetchall()
+    
+    idx = next((i for i, r in enumerate(rows) if r[0] == activity_id), None)
+    if idx is not None:
+        swap_idx = idx - 1 if direction == "up" else idx + 1
+        if 0 <= swap_idx < len(rows):
+            curr_id, curr_order = rows[idx]
+            target_id, target_order = rows[swap_idx]
+
+            # If orders are currently identical, assign unique indexes first
+            if curr_order == target_order:
+                for i, r in enumerate(rows):
+                    cursor.execute("UPDATE activities SET sort_order = ? WHERE id = ?", (i, r[0]))
+                curr_order = idx
+                target_order = swap_idx
+
+            cursor.execute("UPDATE activities SET sort_order = ? WHERE id = ?", (target_order, curr_id))
+            cursor.execute("UPDATE activities SET sort_order = ? WHERE id = ?", (curr_order, target_id))
+            conn.commit()
+    conn.close()
 
 def add_activity(name: str, category: str = "Routine", is_negative: bool = False):
     conn = get_connection()
@@ -368,14 +400,46 @@ def get_tasks():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, title, status, completed_year, completed_week 
+        SELECT id, title, status, completed_year, completed_week, COALESCE(notes, '') 
         FROM tasks 
         WHERE active = 1 
-        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, id DESC
+        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, sort_order ASC, id DESC
     """)
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def move_task(task_id: int, direction: str):
+    """Moves a quest up or down among non-completed tasks."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, sort_order, status 
+        FROM tasks 
+        WHERE active = 1 
+        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, sort_order ASC, id DESC
+    """)
+    rows = cursor.fetchall()
+    
+    idx = next((i for i, r in enumerate(rows) if r[0] == task_id), None)
+    if idx is not None:
+        swap_idx = idx - 1 if direction == "up" else idx + 1
+        if 0 <= swap_idx < len(rows):
+            # Only swap tasks within the same status group (e.g. don't swap active below complete)
+            if rows[idx][2] == rows[swap_idx][2]:
+                curr_id, curr_order, _ = rows[idx]
+                target_id, target_order, _ = rows[swap_idx]
+
+                if curr_order == target_order:
+                    for i, r in enumerate(rows):
+                        cursor.execute("UPDATE tasks SET sort_order = ? WHERE id = ?", (i, r[0]))
+                    curr_order = idx
+                    target_order = swap_idx
+
+                cursor.execute("UPDATE tasks SET sort_order = ? WHERE id = ?", (target_order, curr_id))
+                cursor.execute("UPDATE tasks SET sort_order = ? WHERE id = ?", (curr_order, target_id))
+                conn.commit()
+    conn.close()
 
 def add_task(title: str, status: str = "Planning"):
     conn = get_connection()

@@ -61,8 +61,7 @@ class ScheduleView(ft.Column):
                 if avg >= 8.0:
                     self.daily_score_texts[d].color = ft.Colors.GREEN_ACCENT
                 elif avg >= 5.0:
-                    daily_score = ft.Colors.ORANGE_ACCENT
-                    self.daily_score_texts[d].color = daily_score
+                    self.daily_score_texts[d].color = ft.Colors.ORANGE_ACCENT
                 else:
                     self.daily_score_texts[d].color = ft.Colors.RED_ACCENT
             else:
@@ -80,15 +79,20 @@ class ScheduleView(ft.Column):
         db.save_log(activity_id, self.year, self.week, day_idx, selected_status, score)
         self.calculate_daily_scores()
         update_desktop_wallpaper()
-                
 
     def on_delete_activity(self, activity_id):
         db.delete_activity(activity_id)
         self.render()
         self.calculate_daily_scores()
+        update_desktop_wallpaper()
+
+    def on_move_activity(self, activity_id: int, direction: str):
+        db.move_activity(activity_id, direction)
+        self.render()
+        self.calculate_daily_scores()
+        update_desktop_wallpaper()
 
     def quick_fill_today(self, e):
-        """Fills all unselected activities for today with a passing mark."""
         logs = db.get_current_week_logs(self.year, self.week)
         activities = db.get_activities()
 
@@ -127,7 +131,6 @@ class ScheduleView(ft.Column):
                     ft.Row([self.xp_bar, self.xp_fraction_text])
                 ], spacing=3),
                 ft.Row([
-                    # Modern ft.Button
                     ft.Button(
                         content="Quick-Fill Today",
                         icon=ft.Icons.BOLT,
@@ -148,7 +151,7 @@ class ScheduleView(ft.Column):
         )
         self.controls.append(gamification_banner)
 
-        # Title Row
+        # 2. Title Row
         self.controls.append(
             ft.Container(
                 content=ft.Row([
@@ -159,7 +162,7 @@ class ScheduleView(ft.Column):
             )
         )
 
-        # Header Row
+        # 3. Header Row (Activity & Category: 250px | 7 Days: 115px each | Actions: 110px)
         header_cells = [
             ft.Container(
                 content=ft.Text("Activity & Category", weight=ft.FontWeight.BOLD, size=14),
@@ -185,7 +188,8 @@ class ScheduleView(ft.Column):
                 )
             )
 
-        header_cells.append(ft.Container(width=50))
+        # Spacer for action buttons (110px)
+        header_cells.append(ft.Container(width=110))
 
         self.controls.append(
             ft.Container(
@@ -197,7 +201,7 @@ class ScheduleView(ft.Column):
             )
         )
 
-        # Activity Rows
+        # 4. Activity Rows
         for act_id, act_name, category, is_negative in activities:
             cat_color = CATEGORY_COLORS.get(category, ft.Colors.GREY_400)
             
@@ -259,16 +263,33 @@ class ScheduleView(ft.Column):
                     )
                 )
 
+            # Reordering & Delete Action Buttons (110px)
             row_cells.append(
                 ft.Container(
-                    content=ft.IconButton(
-                        icon=ft.Icons.DELETE_OUTLINE,
-                        icon_color=ft.Colors.RED_400,
-                        icon_size=20,
-                        tooltip="Delete activity",
-                        on_click=lambda e, a=act_id: self.on_delete_activity(a)
-                    ),
-                    width=50,
+                    content=ft.Row([
+                        ft.IconButton(
+                            icon=ft.Icons.ARROW_UPWARD,
+                            icon_size=16,
+                            icon_color=ft.Colors.GREY_400,
+                            tooltip="Move Up",
+                            on_click=lambda e, a=act_id: self.on_move_activity(a, "up")
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.ARROW_DOWNWARD,
+                            icon_size=16,
+                            icon_color=ft.Colors.GREY_400,
+                            tooltip="Move Down",
+                            on_click=lambda e, a=act_id: self.on_move_activity(a, "down")
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            icon_color=ft.Colors.RED_400,
+                            icon_size=18,
+                            tooltip="Delete activity",
+                            on_click=lambda e, a=act_id: self.on_delete_activity(a)
+                        )
+                    ], spacing=0, alignment=ft.MainAxisAlignment.END),
+                    width=110,
                     alignment=ft.Alignment.CENTER
                 )
             )
@@ -280,7 +301,7 @@ class ScheduleView(ft.Column):
                 )
             )
 
-        # 3. Add Activity Row
+        # 5. Add Activity Row
         new_activity_input = ft.TextField(
             hint_text="New activity name...",
             width=200,
@@ -337,7 +358,7 @@ class ScheduleView(ft.Column):
             )
         )
 
-        # 4. Daily Score Footer Row
+        # 6. Daily Score Footer Row
         footer_cells = [
             ft.Container(
                 content=ft.Text("Daily Score (0-10)", weight=ft.FontWeight.BOLD, size=14),
@@ -362,7 +383,7 @@ class ScheduleView(ft.Column):
                 )
             )
 
-        footer_cells.append(ft.Container(width=50))
+        footer_cells.append(ft.Container(width=110))
 
         self.controls.append(
             ft.Container(
