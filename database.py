@@ -634,17 +634,36 @@ def get_events_for_date(target_date: date):
     return matching_events
 
 def get_upcoming_events(limit=3):
-    """Fetches upcoming events for the next 14 days (for HUD display)."""
-    today = date.today()
+    """
+    Fetches upcoming events for the next 14 days.
+    - Excludes events that have already passed earlier today (start_hour < current_hour).
+    - Excludes events that have already been marked as completed.
+    """
+    now = datetime.now()
+    today = now.date()
+    current_hour = now.hour
     upcoming = []
 
     for i in range(14):
         check_date = date.fromordinal(today.toordinal() + i)
         day_events = get_events_for_date(check_date)
+        date_str = check_date.strftime("%Y-%m-%d")
+
         for ev in day_events:
-            upcoming.append((check_date, ev[1], ev[3], ev[4]))
+            eid, title, _, start_hour, rec = ev
+
+            # 1. For today: ignore events whose start hour has already passed
+            if check_date == today and start_hour < current_hour:
+                continue
+
+            # 2. Ignore events already marked as completed
+            if is_event_completed(eid, date_str):
+                continue
+
+            upcoming.append((check_date, title, start_hour, rec))
             if len(upcoming) >= limit:
                 return upcoming
+
     return upcoming
 
 # --- Quest Notes Database Operations ---

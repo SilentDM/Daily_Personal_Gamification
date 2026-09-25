@@ -47,6 +47,7 @@ class ScheduleView(ft.Column):
             self.xp_fraction_text.value = f"{xp_in_level:.1f} / 10 XP to Lvl {level + 1} (Total: {total_xp:.1f} / 1000)"
 
     def calculate_daily_scores(self):
+        self.year, self.week, self.today_idx = db.get_current_week_info()
         logs = db.get_current_week_logs(self.year, self.week)
         active_ids = {a[0] for a in db.get_activities()}
         
@@ -115,6 +116,7 @@ class ScheduleView(ft.Column):
 
     def render(self):
         self.controls.clear()
+        self.year, self.week, self.today_idx = db.get_current_week_info()
         logs = db.get_current_week_logs(self.year, self.week)
         activities = db.get_activities()
 

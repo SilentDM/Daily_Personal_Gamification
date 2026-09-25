@@ -35,6 +35,7 @@ class GraphsView(ft.Column):
     def refresh(self):
         """Re-reads database logs and builds the full analytics dashboard."""
         self.controls.clear()
+        self.year, self.week, _ = db.get_current_week_info()
         logs = db.get_current_week_logs(self.year, self.week)
         active_ids = {a[0] for a in db.get_activities()}
         insights = db.get_weekly_insights(self.year, self.week)

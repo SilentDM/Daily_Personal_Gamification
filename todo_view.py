@@ -59,6 +59,7 @@ class TodoView(ft.Column):
     def render(self):
         self.controls.clear()
         tasks = db.get_tasks()
+        self.year, self.week, _ = db.get_current_week_info()
         completed_this_week = db.get_weekly_completed_tasks_count(self.year, self.week)
         bonus_xp = completed_this_week * QUEST_BONUS_XP
 

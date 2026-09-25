@@ -225,20 +225,39 @@ def main(page: ft.Page):
             page.update()
 
     def reminder_loop():
+        last_checked_day = date.today()
+        last_checked_hour = datetime.now().hour
+
         while True:
             time.sleep(20)
             try:
-                today = date.today()
-                today_str = today.strftime("%Y-%m-%d")
-                events = db.get_events_for_date(today)
                 now = datetime.now()
+                today = now.date()
+                today_str = today.strftime("%Y-%m-%d")
 
+                # --- 1. Automatic Midnight Rollover ---
+                if today != last_checked_day:
+                    last_checked_day = today
+                    last_checked_hour = now.hour
+                    schedule_view.render()
+                    schedule_view.calculate_daily_scores()
+                    update_desktop_wallpaper()
+                    page.update()
+
+                # --- 2. Hourly Wallpaper Refresh (Cleans passed appointments) ---
+                elif now.hour != last_checked_hour:
+                    last_checked_hour = now.hour
+                    update_desktop_wallpaper()
+
+                # --- 3. Calendar Event Reminders ---
+                events = db.get_events_for_date(today)
                 for ev in events:
                     eid, title, _, hour, _ = ev
                     event_dt = datetime(today.year, today.month, today.day, hour, 0, 0)
                     delta_sec = (event_dt - now).total_seconds()
                     delta_min = delta_sec / 60.0
 
+                    # 15-minute warning
                     if 13.0 <= delta_min <= 16.0:
                         key = (eid, today_str, "15m")
                         if key not in NOTIFIED_ALARMS:
@@ -251,6 +270,7 @@ def main(page: ft.Page):
                                 eid, today_str
                             )
 
+                    # Starting Now warning
                     elif -2.0 <= delta_min <= 3.0:
                         key = (eid, today_str, "0m")
                         if key not in NOTIFIED_ALARMS:
@@ -262,7 +282,7 @@ def main(page: ft.Page):
                                 f"'{title}' starts now ({hour:02d}:00)!",
                                 eid, today_str
                             )
-            except Exception as ex:
+            except Exception:
                 pass
 
     threading.Thread(target=reminder_loop, daemon=True).start()
