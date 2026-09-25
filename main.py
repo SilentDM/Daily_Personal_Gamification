@@ -1,3 +1,9 @@
+try:
+    from updater import check_for_updates
+    check_for_updates()
+except Exception:
+    pass
+
 import flet as ft
 import database as db
 import threading
