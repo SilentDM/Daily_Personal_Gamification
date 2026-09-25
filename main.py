@@ -9,6 +9,7 @@ import database as db
 import threading
 import time
 import os
+import subprocess
 import ctypes
 import pystray
 import winsound
@@ -28,15 +29,6 @@ APP_TITLE = "Personal Gamification Tracker"
 TRAY_INITIALIZED = False
 tray_icon_instance = None
 NOTIFIED_ALARMS = set()
-
-def force_exit():
-    """Immediately and cleanly terminates all background threads and processes."""
-    try:
-        if tray_icon_instance:
-            tray_icon_instance.visible = False
-    except Exception:
-        pass
-    os._exit(0)
 
 def get_window_hwnd():
     return ctypes.windll.user32.FindWindowW(None, APP_TITLE)
@@ -80,6 +72,33 @@ def main(page: ft.Page):
             hide_window_to_tray()
 
     page.window.on_event = on_window_event
+
+    # 2. Foolproof Clean Exit: Destroys GUI client and kills entire process tree
+    def clean_quit():
+        global tray_icon_instance
+        try:
+            if tray_icon_instance:
+                tray_icon_instance.stop()
+        except Exception:
+            pass
+
+        try:
+            page.window.prevent_close = False
+            page.window.destroy()
+        except Exception:
+            pass
+
+        # Kill the entire process tree (Python + Flutter client) instantly
+        try:
+            subprocess.run(
+                f"taskkill /F /T /PID {os.getpid()}",
+                shell=True,
+                creationflags=0x08000000
+            )
+        except Exception:
+            pass
+
+        os._exit(0)
 
     db.init_db()
 
@@ -143,7 +162,7 @@ def main(page: ft.Page):
                 icon=ft.Icons.POWER_SETTINGS_NEW,
                 icon_color=ft.Colors.RED_400,
                 tooltip="Quit Application Completely",
-                on_click=lambda e: force_exit()
+                on_click=lambda e: clean_quit()
             ),
             padding=ft.Padding.only(bottom=20)
         ),
@@ -168,7 +187,7 @@ def main(page: ft.Page):
 
     update_desktop_wallpaper()
 
-    # --- System Tray Handlers (Fixed Deadlock) ---
+    # --- System Tray Handlers ---
     def show_window(icon, item):
         restore_window_from_tray(page)
 
@@ -176,8 +195,7 @@ def main(page: ft.Page):
         update_desktop_wallpaper()
 
     def quit_from_tray(icon, item):
-        # Trigger force_exit in an independent thread so pystray doesn't deadlock
-        threading.Thread(target=force_exit, daemon=True).start()
+        clean_quit()
 
     if not TRAY_INITIALIZED:
         TRAY_INITIALIZED = True
@@ -241,7 +259,7 @@ def main(page: ft.Page):
                 today = now.date()
                 today_str = today.strftime("%Y-%m-%d")
 
-                # --- 1. Automatic Midnight Rollover ---
+                # 1. Midnight Rollover
                 if today != last_checked_day:
                     last_checked_day = today
                     last_checked_hour = now.hour
@@ -250,12 +268,12 @@ def main(page: ft.Page):
                     update_desktop_wallpaper()
                     page.update()
 
-                # --- 2. Hourly Wallpaper Refresh (Cleans passed appointments) ---
+                # 2. Hourly Wallpaper Refresh
                 elif now.hour != last_checked_hour:
                     last_checked_hour = now.hour
                     update_desktop_wallpaper()
 
-                # --- 3. Calendar Event Reminders ---
+                # 3. Calendar Event Reminders
                 events = db.get_events_for_date(today)
                 for ev in events:
                     eid, title, _, hour, _ = ev
@@ -263,7 +281,6 @@ def main(page: ft.Page):
                     delta_sec = (event_dt - now).total_seconds()
                     delta_min = delta_sec / 60.0
 
-                    # 15-minute warning
                     if 13.0 <= delta_min <= 16.0:
                         key = (eid, today_str, "15m")
                         if key not in NOTIFIED_ALARMS:
@@ -276,7 +293,6 @@ def main(page: ft.Page):
                                 eid, today_str
                             )
 
-                    # Starting Now warning
                     elif -2.0 <= delta_min <= 3.0:
                         key = (eid, today_str, "0m")
                         if key not in NOTIFIED_ALARMS:
