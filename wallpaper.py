@@ -72,7 +72,9 @@ def update_desktop_wallpaper():
 
         # Quests
         tasks = db.get_tasks()
-        active_quests = [t[1] for t in tasks if t[2] != "Complete"][:3]
+        active_quests = [
+            f"{t[1]} ({int(t[7])}%)" if t[7] > 0 else t[1]
+            for t in tasks if t[2] != "Complete"][:3]
         
         # In-Progress Study Chapters
         study_sessions = db.get_study_sessions()
