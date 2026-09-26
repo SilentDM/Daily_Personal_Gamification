@@ -71,7 +71,7 @@ class TodoView(ft.Column):
     def render(self):
         year, week, _ = db.get_current_week_info()
         self.controls.clear()
-        tasks = db.get_tasks()
+        raw_tasks = db.get_tasks()
         completed_this_week = db.get_weekly_completed_tasks_count(year, week)
         bonus_xp = completed_this_week * QUEST_BONUS_XP
 
@@ -111,7 +111,7 @@ class TodoView(ft.Column):
             if new_task_input.value and new_task_input.value.strip():
                 new_id = db.add_task(new_task_input.value.strip())
                 new_task_input.value = ""
-                self.expanded_tasks.add(new_id)  # Auto-expand to add subquests
+                self.expanded_tasks.add(new_id)
                 self.render()
 
         add_bar = ft.Container(
@@ -133,7 +133,7 @@ class TodoView(ft.Column):
                 ft.Text("Main Quest", weight=ft.FontWeight.BOLD, size=14, expand=True),
                 ft.Container(content=ft.Text("Progress", weight=ft.FontWeight.BOLD, size=14), width=230),
                 ft.Container(content=ft.Text("Bounty", weight=ft.FontWeight.BOLD, size=14), width=110),
-                ft.Container(width=110)  # Spacer for Reorder/Delete
+                ft.Container(width=110)
             ]),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH,
             border_radius=8,
@@ -142,7 +142,7 @@ class TodoView(ft.Column):
         )
         self.controls.append(header_row)
 
-        if not tasks:
+        if not raw_tasks:
             self.controls.append(
                 ft.Container(
                     content=ft.Text("No active quests. Add one above!", color=ft.Colors.GREY_500, size=14),
@@ -151,8 +151,28 @@ class TodoView(ft.Column):
                 )
             )
 
-        # 4. Quest Cards
-        for task_id, title, status, comp_yr, comp_wk, notes, subtasks, progress_pct in tasks:
+        # 4. Quest Cards (Safe Unpack for both 6 and 8 elements)
+        for task_data in raw_tasks:
+            task_id = task_data[0]
+            title = task_data[1]
+            status = task_data[2]
+            comp_yr = task_data[3]
+            comp_wk = task_data[4]
+            notes = task_data[5] if len(task_data) > 5 else ""
+
+            # Check if database returned 8 items or fallback
+            if len(task_data) >= 8:
+                subtasks = task_data[6]
+                progress_pct = task_data[7]
+            else:
+                subtasks = db.get_subtasks(task_id) if hasattr(db, "get_subtasks") else []
+                if subtasks:
+                    weights = {"Planning": 0.0, "Started": 25.0, "In Progress": 50.0, "Almost There": 75.0, "Complete": 100.0}
+                    total_w = sum(weights.get(s[2], 0.0) for s in subtasks)
+                    progress_pct = total_w / len(subtasks)
+                else:
+                    progress_pct = 100.0 if status == "Complete" else 0.0
+
             is_complete = (status == "Complete" or progress_pct >= 99.9)
             is_expanded = (task_id in self.expanded_tasks)
 
@@ -169,7 +189,6 @@ class TodoView(ft.Column):
             completed_subs = sum(1 for s in subtasks if s[2] == "Complete")
             ratio_text = f"{completed_subs}/{len(subtasks)} ({int(progress_pct)}%)" if subtasks else f"{int(progress_pct)}%"
 
-            # Progress Bar Widget
             progress_widget = ft.Container(
                 content=ft.Column([
                     ft.Row([
@@ -181,7 +200,6 @@ class TodoView(ft.Column):
                 width=230
             )
 
-            # Bounty Badge
             bounty_badge = ft.Container(
                 content=ft.Text(
                     f"+{QUEST_BONUS_XP} XP (W{comp_wk})" if is_complete else "Pending",
@@ -251,11 +269,10 @@ class TodoView(ft.Column):
 
             card_items = [main_row]
 
-            # --- Expanded Content (Subquests List + Inline Add + Notepad) ---
+            # Expanded Content (Subquests List + Inline Add + Notepad)
             if is_expanded:
                 sub_rows = []
 
-                # Render existing subquests
                 for sub_id, sub_title, sub_status, _ in subtasks:
                     sub_done = (sub_status == "Complete")
                     sub_color = STAGE_COLORS.get(sub_status, ft.Colors.WHITE)
@@ -316,7 +333,6 @@ class TodoView(ft.Column):
                     )
                     sub_rows.append(sub_row)
 
-                # Quick Add-Subquest input
                 new_sub_input = ft.TextField(
                     hint_text="Add milestone / step (e.g. -2kg, Coletar documentos, Preparar mapas)...",
                     expand=True,
@@ -333,7 +349,6 @@ class TodoView(ft.Column):
                     )
                 ], spacing=10)
 
-                # Notepad Section for this Quest
                 notes_field = ft.TextField(
                     value=notes,
                     hint_text="Write notes, reference links, parts, notes, or ideas here...",

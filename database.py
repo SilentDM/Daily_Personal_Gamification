@@ -100,6 +100,19 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS subtasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT DEFAULT 'Planning',
+            sort_order INTEGER DEFAULT 0,
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES tasks (id)
+        )
+    """)
 
     # 2. Migrations for Activities table
     cursor.execute("PRAGMA table_info(activities)")
@@ -389,7 +402,134 @@ def get_weekly_insights(year: int, week: int):
     }
 
 # --- Tasks / Quests Operations ---
+# --- Subquest Definitions and Operations ---
+SUBQUEST_WEIGHTS = {
+    "Planning": 0.0,
+    "Started": 25.0,
+    "In Progress": 50.0,
+    "Almost There": 75.0,
+    "Complete": 100.0
+}
+
+def get_subtasks(task_id: int):
+    """Fetches all active subquests for a given parent quest."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, status, sort_order 
+        FROM subtasks 
+        WHERE task_id = ? AND active = 1 
+        ORDER BY sort_order ASC, id ASC
+    """, (task_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def add_subtask(task_id: int, title: str, status: str = "Planning"):
+    """Adds a new subquest to a main quest."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM subtasks WHERE task_id = ? AND active = 1", (task_id,))
+    next_order = cursor.fetchone()[0]
+    cursor.execute("""
+        INSERT INTO subtasks (task_id, title, status, sort_order) 
+        VALUES (?, ?, ?, ?)
+    """, (task_id, title, status, next_order))
+    sub_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    year, week, _ = get_current_week_info()
+    recalculate_task_progress(task_id, year, week)
+    return sub_id
+
+def update_subtask_status(subtask_id: int, status: str):
+    """Updates the status of a subquest and auto-recalculates parent progress."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subtask_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return
+
+    task_id = row[0]
+    cursor.execute("UPDATE subtasks SET status = ? WHERE id = ?", (status, subtask_id))
+    conn.commit()
+    conn.close()
+
+    year, week, _ = get_current_week_info()
+    recalculate_task_progress(task_id, year, week)
+
+def delete_subtask(subtask_id: int):
+    """Deactivates a subquest and updates parent progress."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subtask_id,))
+    row = cursor.fetchone()
+    if row:
+        task_id = row[0]
+        cursor.execute("UPDATE subtasks SET active = 0 WHERE id = ?", (subtask_id,))
+        conn.commit()
+        year, week, _ = get_current_week_info()
+        recalculate_task_progress(task_id, year, week)
+    conn.close()
+
+def move_subtask(subtask_id: int, direction: str):
+    """Moves a subquest up or down inside its parent quest."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subtask_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return
+
+    task_id = row[0]
+    cursor.execute("""
+        SELECT id, sort_order 
+        FROM subtasks 
+        WHERE task_id = ? AND active = 1 
+        ORDER BY sort_order ASC, id ASC
+    """, (task_id,))
+    rows = cursor.fetchall()
+
+    idx = next((i for i, r in enumerate(rows) if r[0] == subtask_id), None)
+    if idx is not None:
+        swap_idx = idx - 1 if direction == "up" else idx + 1
+        if 0 <= swap_idx < len(rows):
+            curr_id, curr_order = rows[idx]
+            target_id, target_order = rows[swap_idx]
+
+            if curr_order == target_order:
+                for i, r in enumerate(rows):
+                    cursor.execute("UPDATE subtasks SET sort_order = ? WHERE id = ?", (i, r[0]))
+                curr_order = idx
+                target_order = swap_idx
+
+            cursor.execute("UPDATE subtasks SET sort_order = ? WHERE id = ?", (target_order, curr_id))
+            cursor.execute("UPDATE subtasks SET sort_order = ? WHERE id = ?", (curr_order, target_id))
+            conn.commit()
+    conn.close()
+
+def recalculate_task_progress(task_id: int, year: int, week: int):
+    """Automatically marks parent quest complete if all subquests are complete."""
+    subtasks = get_subtasks(task_id)
+    if not subtasks:
+        return
+
+    total_weight = sum(SUBQUEST_WEIGHTS.get(s[2], 0.0) for s in subtasks)
+    progress_pct = total_weight / len(subtasks)
+
+    if progress_pct >= 99.9:
+        update_task_status(task_id, "Complete", year, week)
+    else:
+        update_task_status(task_id, "In Progress", year, week)
 def get_tasks():
+    """
+    Returns tasks with their subquests and calculated progress percentage.
+    Format: (id, title, status, completed_year, completed_week, notes, subtasks, progress_pct)
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -400,7 +540,22 @@ def get_tasks():
     """)
     rows = cursor.fetchall()
     conn.close()
-    return rows
+
+    result = []
+    for r in rows:
+        task_id = r[0]
+        status = r[2]
+        subtasks = get_subtasks(task_id)
+
+        if subtasks:
+            total_weight = sum(SUBQUEST_WEIGHTS.get(s[2], 0.0) for s in subtasks)
+            progress_pct = total_weight / len(subtasks)
+        else:
+            progress_pct = 100.0 if status == "Complete" else 0.0
+
+        result.append((r[0], r[1], r[2], r[3], r[4], r[5], subtasks, progress_pct))
+
+    return result
 
 def add_task(title: str, status: str = "Planning"):
     conn = get_connection()
