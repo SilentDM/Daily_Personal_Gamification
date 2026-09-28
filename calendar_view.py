@@ -186,7 +186,7 @@ class CalendarView(ft.Column):
                 ft.Row([
                     ft.IconButton(ft.Icons.ARROW_BACK, icon_size=28, tooltip="Back to Month", on_click=self.back_to_month),
                     ft.Column([
-                        ft.Text(self.selected_date.strftime("%A, %d %B %Y"), size=22, weight=ft.FontWeight.BOLD),
+                        ft.Text(self.selected_date.strftime("%A, %d-%m-%y"), size=22, weight=ft.FontWeight.BOLD),
                         ft.Text("Click any hour block to schedule an event", size=13, color=ft.Colors.GREY_400)
                     ], spacing=2)
                 ], spacing=10),

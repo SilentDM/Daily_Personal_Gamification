@@ -23,6 +23,7 @@ from todo_view import TodoView
 from study_view import StudyView
 from wallpaper_view import WallpaperView
 from calendar_view import CalendarView
+from documents_view import DocumentsView
 
 APP_TITLE = "Personal Gamification Tracker"
 
@@ -117,6 +118,7 @@ def main(page: ft.Page):
     study_view = StudyView(page)
     wallpaper_view = WallpaperView(page)
     calendar_view = CalendarView(page)
+    documents_view = DocumentsView(page)
 
     def on_nav_change(e):
         idx = e.control.selected_index
@@ -126,6 +128,7 @@ def main(page: ft.Page):
         study_view.visible = (idx == 3)
         wallpaper_view.visible = (idx == 4)
         calendar_view.visible = (idx == 5)
+        documents_view.visible = (idx == 6)
 
         if idx == 0:
             schedule_view.render()
@@ -140,6 +143,8 @@ def main(page: ft.Page):
             wallpaper_view.render()
         elif idx == 5:
             calendar_view.render()
+        elif idx == 6:
+            documents_view.render()
 
         page.update()
 
@@ -156,6 +161,7 @@ def main(page: ft.Page):
             ft.NavigationRailDestination(icon=ft.Icons.SCHOOL_OUTLINED, selected_icon=ft.Icons.SCHOOL, label="Study"),
             ft.NavigationRailDestination(icon=ft.Icons.WALLPAPER_OUTLINED, selected_icon=ft.Icons.WALLPAPER, label="Wallpaper"),
             ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, selected_icon=ft.Icons.CALENDAR_MONTH, label="Calendar"),
+            ft.NavigationRailDestination(icon=ft.Icons.FOLDER_SHARED_OUTLINED, selected_icon=ft.Icons.FOLDER_SHARED, label="Documents"),
         ],
         trailing=ft.Container(
             content=ft.IconButton(
@@ -179,7 +185,8 @@ def main(page: ft.Page):
                 todo_view,
                 study_view,
                 wallpaper_view,
-                calendar_view
+                calendar_view,
+                documents_view
             ],
             expand=True
         )

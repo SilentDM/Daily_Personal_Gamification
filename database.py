@@ -1,6 +1,4 @@
-import sqlite3
-import os
-import csv
+import sqlite3, os, csv, json
 from pathlib import Path
 from datetime import datetime, date
 from constants import get_rank_title
@@ -113,6 +111,21 @@ def init_db():
             FOREIGN KEY (task_id) REFERENCES tasks (id)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS personal_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT NOT NULL,       -- 'Identity', 'Vehicle', 'Housing', 'Other'
+            doc_type TEXT NOT NULL,       -- 'CPF', 'RG / CIN', 'CNH', 'Passport', 'CRLV', 'IPTU', etc.
+            title TEXT NOT NULL,          -- e.g. "Minha CNH", "Carro Honda", "Passaporte"
+            doc_number TEXT NOT NULL,
+            secondary_info TEXT DEFAULT '', -- Órgão emissor, Renavam, Placa, etc.
+            issue_date TEXT DEFAULT '',    -- YYYY-MM-DD
+            expiration_date TEXT DEFAULT '', -- YYYY-MM-DD
+            notes TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     # 2. Migrations for Activities table
     cursor.execute("PRAGMA table_info(activities)")
@@ -133,6 +146,11 @@ def init_db():
     if "sort_order" not in task_cols:
         cursor.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0")
         cursor.execute("UPDATE tasks SET sort_order = id WHERE sort_order = 0 OR sort_order IS NULL")
+    
+    cursor.execute("PRAGMA table_info(personal_documents)")
+    doc_cols = [info[1] for info in cursor.fetchall()]
+    if "extra_fields" not in doc_cols:
+        cursor.execute("ALTER TABLE personal_documents ADD COLUMN extra_fields TEXT DEFAULT '[]'")
 
     conn.commit()
     conn.close()
@@ -871,3 +889,85 @@ def export_to_csv():
             writer.writerow([r[0], r[1], "Yes" if r[2] else "No", r[3], r[4], day_str, r[6], r[7]])
 
     return str(file_path)
+
+def get_documents(category_filter: str = "All"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    query = """
+        SELECT id, category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, COALESCE(extra_fields, '[]') 
+        FROM personal_documents 
+        WHERE active = 1
+    """
+    if category_filter != "All":
+        query += " AND category = ?"
+        cursor.execute(query + " ORDER BY id DESC", (category_filter,))
+    else:
+        cursor.execute(query + " ORDER BY id DESC")
+        
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def add_document(category: str, doc_type: str, title: str, doc_number: str, secondary_info: str = "", issue_date: str = "", expiration_date: str = "", notes: str = "", extra_fields: str = "[]"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO personal_documents (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields))
+    doc_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return doc_id
+
+def update_document(doc_id: int, category: str, doc_type: str, title: str, doc_number: str, secondary_info: str, issue_date: str, expiration_date: str, notes: str, extra_fields: str = "[]"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE personal_documents 
+        SET category = ?, doc_type = ?, title = ?, doc_number = ?, secondary_info = ?, issue_date = ?, expiration_date = ?, notes = ?, extra_fields = ?
+        WHERE id = ?
+    """, (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields, doc_id))
+    conn.commit()
+    conn.close()
+
+def delete_document(doc_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE personal_documents SET active = 0 WHERE id = ?", (doc_id,))
+    conn.commit()
+    conn.close()
+
+def parse_flexible_date(date_str: str):
+    if not date_str or not date_str.strip():
+        return None
+    clean = date_str.strip().replace("/", "-")
+    for fmt in ("%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(clean, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+def get_expiring_documents(days_ahead: int = 60):
+    """Returns active documents expiring within `days_ahead` days or already expired."""
+    docs = get_documents("All")
+    today = date.today()
+    expiring = []
+
+    for d in docs:
+        doc_type = d[2]
+        title = d[3]
+        exp = d[7] if len(d) > 7 else ""
+
+        if exp and exp.strip():
+            exp_date = parse_flexible_date(exp)
+            if exp_date:
+                delta = (exp_date - today).days
+                limit = 180 if ("passaporte" in doc_type.lower() or "passport" in doc_type.lower()) else days_ahead
+
+                if delta <= limit:
+                    expiring.append((title, doc_type, exp_date, delta))
+
+    expiring.sort(key=lambda x: x[3])
+    return expiring

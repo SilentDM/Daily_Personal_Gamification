@@ -59,6 +59,7 @@ def update_desktop_wallpaper():
         # 1. Fetch live metrics
         streak = db.get_current_streak()
         total_xp, level, xp_in_level, rank_title = db.get_user_xp_and_level()
+        expiring_docs = db.get_expiring_documents(days_ahead=60)
         year, week, today_idx = db.get_current_week_info()
         logs = db.get_current_week_logs(year, week)
         active_ids = {a[0] for a in db.get_activities()}
@@ -117,6 +118,8 @@ def update_desktop_wallpaper():
             hud_h += 38 + (len(study_lines) * 22)
         if show_calendar and upcoming_events:
             hud_h += 38 + (len(upcoming_events) * 22)
+        if expiring_docs:
+            hud_h += 38 + (len(expiring_docs[:2]) * 22)
 
         margin_x = 70
         margin_y = 60
@@ -207,8 +210,19 @@ def update_desktop_wallpaper():
 
             for ev_date, ev_title, ev_hour, ev_rec in upcoming_events:
                 clean_title = (ev_title[:32] + "...") if len(ev_title) > 32 else ev_title
-                ev_line = f"• [{ev_date.strftime('%d/%m')} {ev_hour:02d}:00] {clean_title}"
+                ev_line = f"• [{ev_date.strftime('%d-%m-%y')} {ev_hour:02d}:00] {clean_title}"
                 draw.text((x1 + 25, curr_y), ev_line, fill=(240, 240, 240, 255), font=font_body)
+                curr_y += 22
+        # Document Expiration Warnings
+        if expiring_docs:
+            draw.line([x1 + 25, curr_y + 4, x2 - 25, curr_y + 4], fill=(50, 60, 75, 255), width=1)
+            draw.text((x1 + 25, curr_y + 12), "BUREAUCRACY ALERTS:", fill=(255, 100, 100, 255), font=font_sub)
+            curr_y += 32
+
+            for d_title, d_type, d_exp, d_days in expiring_docs[:2]:
+                status_msg = f"EXPIRED ({abs(d_days)}d ago)" if d_days < 0 else f"Expires in {d_days}d"
+                d_line = f"• {d_title} [{status_msg}]"
+                draw.text((x1 + 25, curr_y), d_line, fill=(255, 180, 180, 255), font=font_body)
                 curr_y += 22
 
 
