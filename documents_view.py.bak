@@ -3,7 +3,7 @@ import json
 import subprocess
 from datetime import datetime, date
 import database as db
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from wallpaper import update_desktop_wallpaper
 
 CATEGORIES = ["All", "Identity", "Vehicles", "Housing & Finance", "Other"]
 

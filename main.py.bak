@@ -4,24 +4,6 @@ try:
 except Exception:
     pass
 
-import sys as _sys
-import ctypes as _ctypes
-
-# Single-instance guard (after the updater, so an update restart is never blocked)
-_MUTEX = None
-if _sys.platform == "win32":
-    _k32 = _ctypes.WinDLL("kernel32", use_last_error=True)
-    _MUTEX = _k32.CreateMutexW(None, False, "Local\\DailyGamificationTracker")
-    if _ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        try:  # bring the running instance to the front instead
-            _hwnd = _ctypes.windll.user32.FindWindowW(None, "Personal Gamification Tracker")
-            if _hwnd:
-                _ctypes.windll.user32.ShowWindow(_hwnd, 3)
-                _ctypes.windll.user32.SetForegroundWindow(_hwnd)
-        except Exception:
-            pass
-        _sys.exit(0)
-
 import flet as ft
 import database as db
 import threading
@@ -33,7 +15,7 @@ import pystray
 import winsound
 from datetime import datetime, date
 from PIL import Image, ImageDraw
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update
+from wallpaper import update_desktop_wallpaper
 
 from schedule_view import ScheduleView
 from graphs_view import GraphsView
@@ -96,10 +78,6 @@ def main(page: ft.Page):
     def clean_quit():
         global tray_icon_instance
         try:
-            flush_wallpaper_update()  # do not lose a pending wallpaper refresh
-        except Exception:
-            pass
-        try:
             if tray_icon_instance:
                 tray_icon_instance.stop()
         except Exception:
@@ -122,11 +100,6 @@ def main(page: ft.Page):
             pass
 
         os._exit(0)
-
-    try:
-        db.backup_db()  # backup BEFORE migrations touch the database
-    except Exception:
-        pass  # a failed backup must never stop the app from starting
 
     db.init_db()
 
@@ -226,7 +199,7 @@ def main(page: ft.Page):
         restore_window_from_tray(page)
 
     def force_refresh_wallpaper(icon, item):
-        update_desktop_wallpaper(delay=0)
+        update_desktop_wallpaper()
 
     def quit_from_tray(icon, item):
         clean_quit()

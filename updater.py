@@ -1,55 +1,69 @@
+import os
 import subprocess
 import sys
-import os
+from pathlib import Path
+
+# Always operate on the project folder, no matter where the app was launched from
+REPO = Path(__file__).resolve().parent
 
 # Flag for Windows to prevent a black CMD window from popping up
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
+# Never let git wait for a password prompt (it would hang the app on startup)
+_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+
+def _git(*args, timeout=10):
+    return subprocess.run(
+        ["git", *args],
+        cwd=REPO,
+        env=_ENV,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+        creationflags=CREATE_NO_WINDOW,
+    )
+
+
 def check_for_updates():
-    """Checks GitHub for new commits, pulls them, and restarts the app if updated."""
+    """Fetches from GitHub, fast-forwards if behind, and restarts the app.
+
+    Safe by design: any problem (offline, not a git repo, local changes that
+    would conflict, no git installed) simply lets the app start normally.
+    """
     try:
-        # 1. Quick fetch from GitHub (3-second timeout so it never hangs if offline)
-        fetch_res = subprocess.run(
-            ["git", "fetch"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=3,
-            creationflags=CREATE_NO_WINDOW
-        )
-        if fetch_res.returncode != 0:
-            return  # Not a git repo or no internet, continue normally
+        if _git("fetch", timeout=5).returncode != 0:
+            return  # offline or not a git repo
 
-        # 2. Check if local branch is behind origin
-        status_res = subprocess.run(
-            ["git", "status", "-uno"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=3,
-            creationflags=CREATE_NO_WINDOW
-        )
+        # Language-independent (the old "Your branch is behind" check broke in pt-BR)
+        res = _git("rev-list", "--count", "HEAD..@{u}")
+        if res.returncode != 0:
+            return  # no upstream configured
+        if int(res.stdout.strip() or 0) == 0:
+            return  # already up to date
 
-        if "Your branch is behind" in status_res.stdout:
-            # 3. Pull latest code
-            pull_res = subprocess.run(
-                ["git", "pull"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=CREATE_NO_WINDOW
-            )
+        # --ff-only: never creates merge commits or touches conflicting local edits
+        if _git("pull", "--ff-only", timeout=60).returncode != 0:
+            return
 
-            if pull_res.returncode == 0:
-                # 4. Silently install any newly added requirements
-                if os.path.exists("requirements.txt"):
-                    subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        creationflags=CREATE_NO_WINDOW
-                    )
+        req = REPO / "requirements.txt"
+        if req.exists():
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", str(req), "--quiet"],
+                    cwd=REPO,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=300,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+            except Exception:
+                pass  # restart anyway; the app may still work with current packages
 
-                # 5. Restart the application with the fresh code
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+        # execv is unreliable on Windows (breaks on paths with spaces): spawn + exit
+        script = str(Path(sys.argv[0]).resolve())
+        subprocess.Popen([sys.executable, script, *sys.argv[1:]], cwd=REPO)
+        sys.exit(0)  # SystemExit is not an Exception, so it passes through the except below
     except Exception:
-        # If anything fails (offline, git conflict, etc.), just continue opening the app
         pass

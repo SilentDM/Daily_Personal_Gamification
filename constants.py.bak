@@ -22,17 +22,7 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 TASK_STAGES = ["Planning", "Started", "In Progress", "Almost There", "Complete"]
 
 # Quest Bonus XP (matches the 1-100 level discipline scale)
-# XP awarded per source (single source of truth, used by database.py and the views)
-XP_QUEST = 15
-XP_STUDY = 15
-XP_EVENT = 10
-XP_NOTE_PROGRESS = 2.0
-QUEST_BONUS_XP = XP_QUEST  # alias kept for todo_view
-
-# Daily score thresholds (0-10 scale), shared by streak, table colors and charts
-SCORE_PASSING = 7.0
-SCORE_GREEN = SCORE_PASSING
-SCORE_ORANGE = 5.0
+QUEST_BONUS_XP = 20
 
 # 1-100 Level Rank Tiers
 def get_rank_title(level: int) -> str:

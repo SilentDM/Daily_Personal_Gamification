@@ -1,4 +1,4 @@
-flet
-flet-charts
-pillow
-pystray
+flet==1.0.0
+flet-charts==1.0.0
+pillow==12.3.0
+pystray==0.19.5

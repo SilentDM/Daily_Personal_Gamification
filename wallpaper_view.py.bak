@@ -1,6 +1,6 @@
 import flet as ft
 import database as db
-from wallpaper import request_wallpaper_update, COLOR_PALETTES
+from wallpaper import update_desktop_wallpaper, COLOR_PALETTES
 
 class WallpaperView(ft.Column):
     def __init__(self, page: ft.Page):
@@ -18,7 +18,7 @@ class WallpaperView(ft.Column):
         db.set_hud_setting("show_studies", "true" if self.studies_check.value else "false")
         db.set_hud_setting("show_calendar", "true" if self.calendar_check.value else "false")
         
-        request_wallpaper_update(delay=0)
+        update_desktop_wallpaper()
         
         e.control.content = "Applied to Wallpaper!"
         e.control.icon = ft.Icons.CHECK

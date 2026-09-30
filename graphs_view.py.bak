@@ -1,7 +1,7 @@
 import flet as ft
 import flet_charts as fch
 import database as db
-from constants import DAY_NAMES, SCORE_PASSING, SCORE_GREEN, SCORE_ORANGE
+from constants import DAY_NAMES
 
 CATEGORY_COLORS = {
     "Health": ft.Colors.GREEN_400,
@@ -68,7 +68,7 @@ class GraphsView(ft.Column):
         best_day = max(recorded_days, key=lambda x: x[1]) if recorded_days else ("-", 0.0)
 
         # 3. KPI Cards Row
-        passing_status = "🎯 Passing Goal (≥7.0)" if week_avg >= SCORE_PASSING else "⚠️ Below Goal (<7.0)"
+        passing_status = "🎯 Passing Goal (≥7.0)" if week_avg >= 7.0 else "⚠️ Below Goal (<7.0)"
         vice_text = f"{insights['vice_rate']:.0f}% Resisted" if insights['vice_rate'] is not None else "No Vices Logged"
 
         kpi_row = ft.Row([
@@ -84,7 +84,7 @@ class GraphsView(ft.Column):
         current_week_rods = []
         for d in range(7):
             avg = day_averages[d]
-            color = ft.Colors.GREEN_ACCENT if avg >= SCORE_GREEN else (ft.Colors.ORANGE_ACCENT if avg >= SCORE_ORANGE else ft.Colors.RED_ACCENT)
+            color = ft.Colors.GREEN_ACCENT if avg >= 7.5 else (ft.Colors.ORANGE_ACCENT if avg >= 4.5 else ft.Colors.RED_ACCENT)
             current_week_rods.append(
                 fch.BarChartGroup(
                     x=d,

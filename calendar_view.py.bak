@@ -2,7 +2,7 @@ import flet as ft
 import calendar
 from datetime import datetime, date
 import database as db
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from wallpaper import update_desktop_wallpaper
 
 MONTH_NAMES = [
     "", "January", "February", "March", "April", "May", "June",

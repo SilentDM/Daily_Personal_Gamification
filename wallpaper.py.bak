@@ -1,9 +1,7 @@
 import os
 import ctypes
 import textwrap
-import threading
 import database as db
-from constants import SCORE_PASSING, SCORE_ORANGE
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -14,21 +12,6 @@ COLOR_PALETTES = {
     "Purple": {"border": (190, 100, 255, 180), "header": (200, 120, 255, 255), "bar": (190, 100, 255, 255)},
     "Crimson": {"border": (255, 75, 75, 180), "header": (255, 90, 90, 255), "bar": (255, 75, 75, 255)},
 }
-
-def _enable_dpi_awareness():
-    """Without this, GetSystemMetrics returns a scaled (blurry) resolution."""
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-
-_enable_dpi_awareness()
-_BASE_CACHE = {}
-
 
 def get_font(size: int, bold: bool = False):
     font_name = "segoeuib.ttf" if bold else "segoeui.ttf"
@@ -46,14 +29,10 @@ def get_screen_resolution():
 def get_base_wallpaper(bg_mode: str, screen_w: int, screen_h: int):
     if bg_mode != "Pure Black (Minimalist)":
         for ext in [".jpg", ".png", ".jpeg"]:
-            candidate = Path(__file__).resolve().parent / f"base_wallpaper{ext}"
+            candidate = Path(f"base_wallpaper{ext}")
             if candidate.exists():
-                key = (str(candidate), candidate.stat().st_mtime, screen_w, screen_h)
-                if _BASE_CACHE.get("key") != key:
-                    img = Image.open(candidate).convert("RGBA")
-                    _BASE_CACHE["img"] = img.resize((screen_w, screen_h), Image.Resampling.LANCZOS)
-                    _BASE_CACHE["key"] = key
-                return _BASE_CACHE["img"]
+                img = Image.open(candidate).convert("RGBA")
+                return img.resize((screen_w, screen_h), Image.Resampling.LANCZOS)
     
     return Image.new("RGBA", (screen_w, screen_h), (12, 14, 18, 255))
 
@@ -183,8 +162,8 @@ def update_desktop_wallpaper():
 
         # Streak & Score Row
         if show_score:
-            score_status = "PASSING" if today_avg >= SCORE_PASSING else ("NEUTRAL" if today_avg >= SCORE_ORANGE else "NEEDS FOCUS")
-            score_color = (0, 255, 180, 255) if today_avg >= SCORE_PASSING else ((255, 180, 0, 255) if today_avg >= SCORE_ORANGE else (255, 85, 85, 255))
+            score_status = "PASSING" if today_avg >= 7.0 else ("NEUTRAL" if today_avg >= 5.0 else "NEEDS FOCUS")
+            score_color = (0, 255, 180, 255) if today_avg >= 7.0 else ((255, 180, 0, 255) if today_avg >= 5.0 else (255, 85, 85, 255))
             
             draw.text((x1 + 25, curr_y), f"STREAK: {streak} Days", fill=(255, 175, 40, 255), font=font_body_bold)
             draw.text((x1 + 235, curr_y), f"Today: {today_avg:.1f} / 10 [{score_status}]", fill=score_color, font=font_body_bold)
@@ -259,37 +238,3 @@ def update_desktop_wallpaper():
         ctypes.windll.user32.SystemParametersInfoW(20, 0, str(wallpaper_path), 3)
     except Exception as ex:
         print(f"Wallpaper update error: {ex}")
-
-# --- Debounced / background wallpaper refresh ---
-_timer = None
-_timer_lock = threading.Lock()
-_render_lock = threading.Lock()
-
-
-def _run_update():
-    with _render_lock:
-        update_desktop_wallpaper()
-
-
-def request_wallpaper_update(delay: float = 2.0):
-    """Schedules a wallpaper refresh in a background thread. Calls made within
-    `delay` seconds are merged into a single render (the UI never blocks)."""
-    global _timer
-    with _timer_lock:
-        if _timer is not None:
-            _timer.cancel()
-        _timer = threading.Timer(delay, _run_update)
-        _timer.daemon = True
-        _timer.start()
-
-
-def flush_wallpaper_update():
-    """Runs a pending refresh immediately (call before quitting)."""
-    global _timer
-    with _timer_lock:
-        pending = _timer is not None and _timer.is_alive()
-        if _timer is not None:
-            _timer.cancel()
-        _timer = None
-    if pending:
-        _run_update()

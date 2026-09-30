@@ -1,9 +1,6 @@
 import flet as ft
 import database as db
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper
-from constants import XP_STUDY
-
-MASTERED_LABEL = f"Mastered (+{XP_STUDY} XP)"
+from wallpaper import update_desktop_wallpaper
 
 DEFAULT_ELI5 = """• What is it?
 -> 
@@ -63,7 +60,7 @@ class StudyView(ft.Row):
             value="In Progress",
             options=[
                 ft.DropdownOption("In Progress"),
-                ft.DropdownOption(MASTERED_LABEL)
+                ft.DropdownOption("Mastered (+30 XP)")
             ],
             width=200,
             dense=True
@@ -73,14 +70,6 @@ class StudyView(ft.Row):
         self.code_input = ft.TextField(label="2. The Toy Sandbox (Proof of Work code example)", multiline=True, min_lines=7, max_lines=None, text_size=12, text_style=ft.TextStyle(font_family="Consolas"))
         self.break_input = ft.TextField(label="3. The Break-It Test (Edge cases & common failures)", multiline=True, min_lines=6, max_lines=None, text_size=13)
         self.recall_input = ft.TextField(label="4. Active Recall Flashcard (Test for future self)", multiline=True, min_lines=6, max_lines=None, text_size=13)
-
-        self._loaded_session_id = None
-        self._snapshot = None
-        for _f in (self.topic_title_input, self.eli5_input, self.code_input,
-                   self.break_input, self.recall_input):
-            _f.on_blur = lambda e: self.save_current()
-        for _dd in (self.source_dropdown, self.status_dropdown):
-            _dd.on_select = lambda e: self.save_current()
 
         self.editor_container = ft.Column(
             scroll=ft.ScrollMode.AUTO, 
@@ -139,38 +128,8 @@ class StudyView(ft.Row):
             right_workspace
         ]
 
-    def _current_values(self):
-        clean_status = "Mastered" if "Mastered" in (self.status_dropdown.value or "") else "In Progress"
-        return (
-            (self.topic_title_input.value or "").strip() or "Untitled",
-            self.source_dropdown.value,
-            self.eli5_input.value or "",
-            self.code_input.value or "",
-            self.break_input.value or "",
-            self.recall_input.value or "",
-            clean_status,
-        )
-
-    def save_current(self):
-        """Autosaves the open chapter if anything changed. Returns True if saved."""
-        sid = self.selected_session_id
-        if sid is None or self._loaded_session_id != sid or self._snapshot is None:
-            return False
-        values = self._current_values()
-        if values == self._snapshot:
-            return False
-        topic, source, eli5, code, break_t, recall, status = values
-        db.update_study_session(
-            session_id=sid, topic=topic, source=source, eli5=eli5, code_sandbox=code,
-            break_test=break_t, recall_questions=recall, status=status
-        )
-        self._snapshot = values
-        update_desktop_wallpaper()
-        return True
-
     def select_chapter(self, session_id: int):
         """Immediately loads editor AND updates sidebar highlight."""
-        self.save_current()  # never lose what was typed in the previous chapter
         self.selected_session_id = session_id
         self.load_editor(session_id)
         self.render_sidebar_tiles()
@@ -215,7 +174,6 @@ class StudyView(ft.Row):
             self.topic_list_column.controls.append(tile)
 
     def refresh_list(self):
-        self.save_current()  # pending edits are saved before reloading from the DB
         sessions = db.get_study_sessions()
         if not sessions:
             self.show_empty_editor()
@@ -240,14 +198,12 @@ class StudyView(ft.Row):
 
         self.topic_title_input.value = topic
         self.source_dropdown.value = source
-        self.status_dropdown.value = MASTERED_LABEL if status == "Mastered" else "In Progress"
+        self.status_dropdown.value = "Mastered (+30 XP)" if status == "Mastered" else "In Progress"
 
         self.eli5_input.value = eli5 if (eli5 and eli5.strip()) else DEFAULT_ELI5
         self.code_input.value = code if (code and code.strip()) else DEFAULT_CODE
         self.break_input.value = break_t if (break_t and break_t.strip()) else DEFAULT_BREAK
         self.recall_input.value = recall if (recall and recall.strip()) else DEFAULT_RECALL
-        self._loaded_session_id = session_id
-        self._snapshot = self._current_values()
 
         def save_clicked(e):
             clean_status = "Mastered" if "Mastered" in self.status_dropdown.value else "In Progress"
@@ -262,7 +218,6 @@ class StudyView(ft.Row):
                 status=clean_status
             )
             e.control.content = "Saved!"
-            self._snapshot = self._current_values()
             self.render_sidebar_tiles()
             update_desktop_wallpaper()
             if self.app_page:

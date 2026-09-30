@@ -1,7 +1,7 @@
-import sqlite3, os, csv, json, shutil
+import sqlite3, os, csv, json
 from pathlib import Path
 from datetime import datetime, date
-from constants import get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, XP_NOTE_PROGRESS, SCORE_PASSING
+from constants import get_rank_title
 
 def get_db_path():
     app_data = os.getenv("APPDATA")
@@ -14,25 +14,12 @@ def get_db_path():
     return str(base_dir / "gamification.db")
 
 def get_connection():
-    return sqlite3.connect(get_db_path(), timeout=10)
+    return sqlite3.connect(get_db_path())
 
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     
-    conn.execute("PRAGMA journal_mode=WAL")
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS activities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT DEFAULT 'Routine',
-            is_negative INTEGER DEFAULT 0,
-            sort_order INTEGER DEFAULT 0,
-            active INTEGER DEFAULT 1
-        )
-    """)
-
     # 1. Base Tables
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS study_sessions (
@@ -287,15 +274,15 @@ def get_user_xp_and_level():
 
     # 2. Completed Quests (+15 XP each)
     cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Complete' AND active = 1")
-    quest_xp = (cursor.fetchone()[0] or 0) * XP_QUEST
+    quest_xp = (cursor.fetchone()[0] or 0) * 15.0
 
     # 3. Mastered Studies (+15 XP each)
     cursor.execute("SELECT COUNT(*) FROM study_sessions WHERE status = 'Mastered' AND active = 1")
-    study_xp = (cursor.fetchone()[0] or 0) * XP_STUDY
+    study_xp = (cursor.fetchone()[0] or 0) * 15.0
     
     # 4. Completed Calendar Events (+10 XP each)
     cursor.execute("SELECT COUNT(*) FROM event_completions WHERE completed = 1")
-    event_xp = (cursor.fetchone()[0] or 0) * XP_EVENT
+    event_xp = (cursor.fetchone()[0] or 0) * 10.0
 
     # 5. Incremental Quest Note Progress (+2 XP per working session)
     cursor.execute("SELECT SUM(xp_awarded) FROM quest_progress_logs")
@@ -344,12 +331,12 @@ def get_current_streak():
     streak = 0
     current_check = today
 
-    if date_scores.get(today, 0) < SCORE_PASSING:
+    if date_scores.get(today, 0) < 7.0:
         current_check = date.fromordinal(today.toordinal() - 1)
 
     while True:
         avg = date_scores.get(current_check, 0)
-        if avg >= SCORE_PASSING:
+        if avg >= 7.0:
             streak += 1
             current_check = date.fromordinal(current_check.toordinal() - 1)
         else:
@@ -547,7 +534,6 @@ def recalculate_task_progress(task_id: int, year: int, week: int):
     """Automatically marks parent quest complete if all subquests are complete."""
     subtasks = get_subtasks(task_id)
     if not subtasks:
-        update_task_status(task_id, "Planning", year, week)
         return
 
     total_weight = sum(SUBQUEST_WEIGHTS.get(s[2], 0.0) for s in subtasks)
@@ -556,7 +542,7 @@ def recalculate_task_progress(task_id: int, year: int, week: int):
     if progress_pct >= 99.9:
         update_task_status(task_id, "Complete", year, week)
     else:
-        update_task_status(task_id, "In Progress" if progress_pct > 0 else "Planning", year, week)
+        update_task_status(task_id, "In Progress", year, week)
 def get_tasks():
     """
     Returns tasks with their subquests and calculated progress percentage.
@@ -603,11 +589,6 @@ def add_task(title: str, status: str = "Planning"):
 def update_task_status(task_id: int, status: str, year: int, week: int):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-    _row = cursor.fetchone()
-    if _row and _row[0] == status:
-        conn.close()
-        return  # nothing changed: keeps the original completed_week
     if status == "Complete":
         cursor.execute("""
             UPDATE tasks 
@@ -698,7 +679,7 @@ def save_task_notes_with_progress(task_id: int, new_notes: str) -> float:
                 can_award = True
 
         if can_award:
-            xp_gained = XP_NOTE_PROGRESS
+            xp_gained = 2.0
             cursor.execute("INSERT INTO quest_progress_logs (task_id, xp_awarded) VALUES (?, ?)", (task_id, xp_gained))
 
     conn.commit()
@@ -990,49 +971,3 @@ def get_expiring_documents(days_ahead: int = 60):
 
     expiring.sort(key=lambda x: x[3])
     return expiring
-
-# --- Manual quest status (quests without subquests) ---
-def set_task_manual_status(task_id: int, complete: bool):
-    """Completes / reopens a quest that has no subquests."""
-    if get_subtasks(task_id):
-        return  # progress is driven by the subquests
-    year, week, _ = get_current_week_info()
-    update_task_status(task_id, "Complete" if complete else "Planning", year, week)
-
-# --- Automatic daily backup with rotation ---
-def backup_db(keep: int = 14):
-    """Creates one consistent backup per day. Set GAMIFICATION_BACKUP_DIR to also
-    copy it to another folder (e.g. OneDrive / Google Drive)."""
-    src = Path(get_db_path())
-    if not src.exists():
-        return None
-
-    dst_dir = src.parent / "backups"
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / f"gamification_{date.today():%Y%m%d}.db"
-    if dst.exists():
-        return str(dst)
-
-    tmp = dst.with_suffix(".tmp")
-    s = sqlite3.connect(str(src))
-    d = sqlite3.connect(str(tmp))
-    try:
-        s.backup(d)
-    finally:
-        d.close()
-        s.close()
-    tmp.replace(dst)
-
-    for old in sorted(dst_dir.glob("gamification_*.db"))[:-keep]:
-        try:
-            old.unlink()
-        except OSError:
-            pass
-
-    extra = os.getenv("GAMIFICATION_BACKUP_DIR")
-    if extra and Path(extra).is_dir():
-        try:
-            shutil.copy2(dst, Path(extra) / dst.name)
-        except OSError:
-            pass
-    return str(dst)

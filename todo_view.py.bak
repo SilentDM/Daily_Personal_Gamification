@@ -1,6 +1,6 @@
 import flet as ft
 import database as db
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from wallpaper import update_desktop_wallpaper
 from constants import TASK_STAGES, QUEST_BONUS_XP
 
 STAGE_COLORS = {
@@ -16,7 +16,6 @@ class TodoView(ft.Column):
         super().__init__(scroll=ft.ScrollMode.AUTO, expand=True, visible=False)
         self.app_page = page
         self.expanded_tasks = set()
-        self.notes_drafts = {}
         self.render()
 
     def on_delete_task(self, task_id):
@@ -28,11 +27,6 @@ class TodoView(ft.Column):
     def on_move_task(self, task_id: int, direction: str):
         db.move_task(task_id, direction)
         self.render()
-
-    def on_toggle_quest(self, task_id: int, complete: bool):
-        db.set_task_manual_status(task_id, complete)
-        self.render()
-        update_desktop_wallpaper()
 
     def toggle_expand(self, task_id):
         if task_id in self.expanded_tasks:
@@ -64,7 +58,6 @@ class TodoView(ft.Column):
 
     def save_notes_clicked(self, task_id: int, notes_val: str, btn: ft.Button):
         xp_earned = db.save_task_notes_with_progress(task_id, notes_val)
-        self.notes_drafts.pop(task_id, None)
         if xp_earned > 0:
             btn.content = f"Saved! (+{xp_earned:.0f} XP 🔥)"
             btn.icon = ft.Icons.BOLT
@@ -229,17 +222,11 @@ class TodoView(ft.Column):
                         tooltip="Expand / Collapse Steps",
                         on_click=lambda e, tid=task_id: self.toggle_expand(tid)
                     ),
-                    (ft.IconButton(
-                        icon=ft.Icons.CHECK_CIRCLE if is_complete else ft.Icons.RADIO_BUTTON_UNCHECKED,
-                        icon_color=ft.Colors.GREEN_ACCENT if is_complete else ft.Colors.CYAN_ACCENT,
-                        icon_size=20,
-                        tooltip="Reopen quest" if is_complete else "Mark quest as complete",
-                        on_click=lambda e, tid=task_id, done=is_complete: self.on_toggle_quest(tid, not done)
-                    ) if not subtasks else ft.Icon(
+                    ft.Icon(
                         ft.Icons.CHECK_CIRCLE if is_complete else ft.Icons.RADIO_BUTTON_UNCHECKED,
                         color=ft.Colors.GREEN_ACCENT if is_complete else ft.Colors.CYAN_ACCENT,
                         size=20
-                    )),
+                    ),
                     ft.Text(
                         title,
                         size=15,
@@ -363,22 +350,13 @@ class TodoView(ft.Column):
                 ], spacing=10)
 
                 notes_field = ft.TextField(
-                    value=self.notes_drafts.get(task_id, notes),
+                    value=notes,
                     hint_text="Write notes, reference links, parts, notes, or ideas here...",
                     multiline=True,
                     min_lines=3,
                     max_lines=10,
                     text_size=13
                 )
-                def _on_notes_change(e, tid=task_id):
-                    self.notes_drafts[tid] = e.control.value
-
-                def _on_notes_blur(e, tid=task_id):
-                    db.save_task_notes_with_progress(tid, e.control.value)
-                    self.notes_drafts.pop(tid, None)
-
-                notes_field.on_change = _on_notes_change
-                notes_field.on_blur = _on_notes_blur
                 save_btn = ft.Button(content="Save Notes", icon=ft.Icons.SAVE)
                 save_btn.on_click = lambda e, tid=task_id, nf=notes_field, b=save_btn: self.save_notes_clicked(tid, nf.value, b)
 
