@@ -1,6 +1,4 @@
 import sqlite3, os, csv, json, shutil
-import calendar as _calendar
-import secure
 from pathlib import Path
 from datetime import datetime, date
 from constants import get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, XP_NOTE_PROGRESS, SCORE_PASSING
@@ -162,7 +160,6 @@ def init_db():
         cursor.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0")
         cursor.execute("UPDATE tasks SET sort_order = id WHERE sort_order = 0 OR sort_order IS NULL")
     
-    _run_v2_migrations(conn)
     cursor.execute("PRAGMA table_info(personal_documents)")
     doc_cols = [info[1] for info in cursor.fetchall()]
     if "extra_fields" not in doc_cols:
@@ -233,16 +230,22 @@ def move_activity(activity_id: int, direction: str):
 
 # --- Daily Logs Operations ---
 def save_log(activity_id: int, year: int, week: int, day_idx: int, status: str, score: int):
-    # v2 save_log
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO daily_logs (activity_id, year, week_number, day_of_week, status, score)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(activity_id, year, week_number, day_of_week)
-        DO UPDATE SET status = excluded.status, score = excluded.score
-    """, (activity_id, year, week, day_idx, status, score))
-    _refresh_habit_day(cursor, year, week, day_idx)
+        SELECT id FROM daily_logs 
+        WHERE activity_id = ? AND year = ? AND week_number = ? AND day_of_week = ?
+    """, (activity_id, year, week, day_idx))
+    row = cursor.fetchone()
+    
+    if row:
+        cursor.execute("UPDATE daily_logs SET status = ?, score = ? WHERE id = ?", (status, score, row[0]))
+    else:
+        cursor.execute("""
+            INSERT INTO daily_logs (activity_id, year, week_number, day_of_week, status, score)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (activity_id, year, week, day_idx, status, score))
+        
     conn.commit()
     conn.close()
 
@@ -264,13 +267,43 @@ def get_current_week_logs(year: int, week: int):
 
 # --- Gamification Calculations (All 5 Discipline Sources) ---
 def get_user_xp_and_level():
-    # v2 get_user_xp_and_level
-    """Total XP is the sum of the XP ledger (history is immutable), capped at 1000."""
     conn = get_connection()
-    total = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM xp_ledger").fetchone()[0] or 0.0
-    conn.close()
+    cursor = conn.cursor()
+    
+    # 1. Daily habit averages net XP: (Daily_Avg - 5.0) * 2.0
+    cursor.execute("""
+        SELECT l.year, l.week_number, l.day_of_week, AVG(l.score)
+        FROM daily_logs l
+        JOIN activities a ON l.activity_id = a.id
+        WHERE a.active = 1 AND l.score IS NOT NULL
+        GROUP BY l.year, l.week_number, l.day_of_week
+    """)
+    day_rows = cursor.fetchall()
+    
+    net_habit_xp = 0.0
+    for y, w, d, avg in day_rows:
+        daily_delta = (avg - 5.0) * 2.0
+        net_habit_xp += daily_delta
 
-    total_xp = max(0.0, min(1000.0, float(total)))
+    # 2. Completed Quests (+15 XP each)
+    cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Complete' AND active = 1")
+    quest_xp = (cursor.fetchone()[0] or 0) * XP_QUEST
+
+    # 3. Mastered Studies (+15 XP each)
+    cursor.execute("SELECT COUNT(*) FROM study_sessions WHERE status = 'Mastered' AND active = 1")
+    study_xp = (cursor.fetchone()[0] or 0) * XP_STUDY
+    
+    # 4. Completed Calendar Events (+10 XP each)
+    cursor.execute("SELECT COUNT(*) FROM event_completions WHERE completed = 1")
+    event_xp = (cursor.fetchone()[0] or 0) * XP_EVENT
+
+    # 5. Incremental Quest Note Progress (+2 XP per working session)
+    cursor.execute("SELECT SUM(xp_awarded) FROM quest_progress_logs")
+    note_progress_xp = (cursor.fetchone()[0] or 0.0)
+
+    # Total discipline XP (0.0 to 1,000.0)
+    total_xp = max(0.0, min(1000.0, net_habit_xp + quest_xp + study_xp + event_xp + note_progress_xp))
+
     if total_xp >= 1000.0:
         level = 100
         xp_in_level = 10.0
@@ -278,52 +311,62 @@ def get_user_xp_and_level():
         level = max(1, int(total_xp // 10) + 1)
         xp_in_level = total_xp % 10.0
 
-    return total_xp, level, xp_in_level, get_rank_title(level)
+    rank_title = get_rank_title(level)
+    conn.close()
+    
+    return total_xp, level, xp_in_level, rank_title
 
 def get_current_streak():
-    # v2 get_current_streak
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT event_date, meta FROM xp_ledger WHERE source = 'habit_day' AND meta IS NOT NULL"
-    ).fetchall()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT l.year, l.week_number, l.day_of_week, AVG(l.score)
+        FROM daily_logs l
+        JOIN activities a ON l.activity_id = a.id
+        WHERE a.active = 1 AND l.score IS NOT NULL
+        GROUP BY l.year, l.week_number, l.day_of_week
+    """)
+    rows = cursor.fetchall()
     conn.close()
 
+    if not rows:
+        return 0
+
     date_scores = {}
-    for d, avg in rows:
+    for y, w, d, avg in rows:
         try:
-            date_scores[date.fromisoformat(d)] = avg
+            day_date = date.fromisocalendar(y, w, d + 1)
+            date_scores[day_date] = avg
         except ValueError:
             continue
-    if not date_scores:
-        return 0
 
     today = date.today()
     streak = 0
     current_check = today
+
     if date_scores.get(today, 0) < SCORE_PASSING:
         current_check = date.fromordinal(today.toordinal() - 1)
 
-    while date_scores.get(current_check, 0) >= SCORE_PASSING:
-        streak += 1
-        current_check = date.fromordinal(current_check.toordinal() - 1)
+    while True:
+        avg = date_scores.get(current_check, 0)
+        if avg >= SCORE_PASSING:
+            streak += 1
+            current_check = date.fromordinal(current_check.toordinal() - 1)
+        else:
+            break
+
     return streak
 
 def get_past_weeks_scores(num_weeks=6):
-    # v2 get_past_weeks_scores
-    """Weekly score = average of the daily averages (same rule as the KPI card)."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT year, week_number, AVG(day_avg) FROM (
-            SELECT l.year AS year, l.week_number AS week_number, l.day_of_week,
-                   AVG(l.score) AS day_avg
-            FROM daily_logs l
-            JOIN activities a ON l.activity_id = a.id
-            WHERE a.active = 1 AND l.score IS NOT NULL
-            GROUP BY l.year, l.week_number, l.day_of_week
-        )
-        GROUP BY year, week_number
-        ORDER BY year ASC, week_number ASC
+        SELECT l.year, l.week_number, AVG(l.score)
+        FROM daily_logs l
+        JOIN activities a ON l.activity_id = a.id
+        WHERE a.active = 1 AND l.score IS NOT NULL
+        GROUP BY l.year, l.week_number
+        ORDER BY l.year ASC, l.week_number ASC
     """)
     rows = cursor.fetchall()
     conn.close()
@@ -558,29 +601,25 @@ def add_task(title: str, status: str = "Planning"):
     return task_id
 
 def update_task_status(task_id: int, status: str, year: int, week: int):
-    # v2 update_task_status
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
-    if row and row[0] == status:
+    _row = cursor.fetchone()
+    if _row and _row[0] == status:
         conn.close()
-        return  # nothing changed: keeps completed_week and never double-awards XP
-
+        return  # nothing changed: keeps the original completed_week
     if status == "Complete":
         cursor.execute("""
-            UPDATE tasks
-            SET status = ?, completed_year = ?, completed_week = ?, completed_at = CURRENT_TIMESTAMP
+            UPDATE tasks 
+            SET status = ?, completed_year = ?, completed_week = ?, completed_at = CURRENT_TIMESTAMP 
             WHERE id = ?
         """, (status, year, week, task_id))
-        _ledger_set(cursor, "quest", str(task_id), date.today().isoformat(), XP_QUEST, replace=False)
     else:
         cursor.execute("""
-            UPDATE tasks
-            SET status = ?, completed_year = NULL, completed_week = NULL, completed_at = NULL
+            UPDATE tasks 
+            SET status = ?, completed_year = NULL, completed_week = NULL, completed_at = NULL 
             WHERE id = ?
         """, (status, task_id))
-        _ledger_clear(cursor, "quest", str(task_id))
     conn.commit()
     conn.close()
 
@@ -627,45 +666,40 @@ def move_task(task_id: int, direction: str):
     conn.close()
 
 def save_task_notes_with_progress(task_id: int, new_notes: str) -> float:
-    # v2 save_task_notes_with_progress
-    """Saves notes and awards XP if content grew by at least 10 characters (15 min cooldown)."""
+    """Saves notes and awards +2.0 XP if content grew by at least 10 characters."""
     conn = get_connection()
     cursor = conn.cursor()
-
+    
     cursor.execute("SELECT COALESCE(notes, '') FROM tasks WHERE id = ?", (task_id,))
     row = cursor.fetchone()
     old_notes = row[0] if row else ""
-    cursor.execute("UPDATE tasks SET notes = ? WHERE id = ?", (new_notes, task_id))
 
+    cursor.execute("UPDATE tasks SET notes = ? WHERE id = ?", (new_notes, task_id))
+    
     xp_gained = 0.0
     new_clean = new_notes.strip()
     old_clean = old_notes.strip()
 
     if len(new_clean) >= len(old_clean) + 10 and new_clean != old_clean:
-        cursor.execute(
-            "SELECT created_at FROM quest_progress_logs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
-            (task_id,),
-        )
+        cursor.execute("""
+            SELECT created_at FROM quest_progress_logs 
+            WHERE task_id = ? 
+            ORDER BY id DESC LIMIT 1
+        """, (task_id,))
         last_log = cursor.fetchone()
 
         can_award = True
         if last_log and last_log[0]:
             try:
                 last_time = datetime.strptime(last_log[0].split(".")[0], "%Y-%m-%d %H:%M:%S")
-                # created_at is CURRENT_TIMESTAMP (UTC), so compare against utcnow
-                if (datetime.utcnow() - last_time).total_seconds() < 900:
+                if (datetime.now() - last_time).total_seconds() < 900:  # 15 min cooldown
                     can_award = False
             except Exception:
                 can_award = True
 
         if can_award:
             xp_gained = XP_NOTE_PROGRESS
-            cursor.execute(
-                "INSERT INTO quest_progress_logs (task_id, xp_awarded) VALUES (?, ?)",
-                (task_id, xp_gained),
-            )
-            _ledger_set(cursor, "note", str(cursor.lastrowid), date.today().isoformat(),
-                        xp_gained, replace=False)
+            cursor.execute("INSERT INTO quest_progress_logs (task_id, xp_awarded) VALUES (?, ?)", (task_id, xp_gained))
 
     conn.commit()
     conn.close()
@@ -706,19 +740,13 @@ def add_study_session(topic: str, source: str = "FIAP"):
     return session_id
 
 def update_study_session(session_id: int, topic: str, source: str, eli5: str, code_sandbox: str, break_test: str, recall_questions: str, status: str):
-    # v2 update_study_session
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        UPDATE study_sessions
-        SET topic = ?, source = ?, eli5 = ?, code_sandbox = ?, break_test = ?, recall_questions = ?,
-            status = ?, updated_at = CURRENT_TIMESTAMP
+        UPDATE study_sessions 
+        SET topic = ?, source = ?, eli5 = ?, code_sandbox = ?, break_test = ?, recall_questions = ?, status = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
     """, (topic, source, eli5, code_sandbox, break_test, recall_questions, status, session_id))
-    if status == "Mastered":
-        _ledger_set(cursor, "study", str(session_id), date.today().isoformat(), XP_STUDY, replace=False)
-    else:
-        _ledger_clear(cursor, "study", str(session_id))
     conn.commit()
     conn.close()
 
@@ -781,56 +809,42 @@ def delete_calendar_event(event_id: int):
     conn.close()
 
 def get_events_for_date(target_date: date):
-    # v2 get_events_for_date
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, title, event_date, start_hour, recurrence
-        FROM calendar_events
+        SELECT id, title, event_date, start_hour, recurrence 
+        FROM calendar_events 
         WHERE active = 1 AND event_date <= ?
         ORDER BY start_hour ASC
     """, (target_date.strftime("%Y-%m-%d"),))
     rows = cursor.fetchall()
     conn.close()
 
-    last_day = _calendar.monthrange(target_date.year, target_date.month)[1]
     matching_events = []
     for r in rows:
-        _, _, start_date_str, _, rec = r
+        eid, title, start_date_str, hour, rec = r
         start_d = datetime.strptime(start_date_str, "%Y-%m-%d").date()
 
-        if rec == "none":
-            match = start_d == target_date
-        elif rec == "weekly":
-            match = start_d.weekday() == target_date.weekday()
-        elif rec == "monthly":
-            # an event on the 31st falls on the last day of shorter months
-            match = target_date.day == min(start_d.day, last_day)
-        elif rec == "yearly":
-            match = (target_date.month == start_d.month
-                     and target_date.day == min(start_d.day, last_day))
-        else:
-            match = False
-
-        if match:
+        if rec == "none" and start_d == target_date:
             matching_events.append(r)
+        elif rec == "weekly" and start_d.weekday() == target_date.weekday():
+            matching_events.append(r)
+        elif rec == "monthly" and start_d.day == target_date.day:
+            matching_events.append(r)
+
     return matching_events
 
 def toggle_event_completion(event_id: int, date_str: str):
-    # v2 toggle_event_completion
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM event_completions WHERE event_id = ? AND completion_date = ?", (event_id, date_str))
     row = cursor.fetchone()
-    ref = f"{event_id}:{date_str}"
 
     if row:
         cursor.execute("DELETE FROM event_completions WHERE id = ?", (row[0],))
-        _ledger_clear(cursor, "event", ref)
         is_done = False
     else:
         cursor.execute("INSERT INTO event_completions (event_id, completion_date) VALUES (?, ?)", (event_id, date_str))
-        _ledger_set(cursor, "event", ref, date_str, XP_EVENT, replace=False)
         is_done = True
 
     conn.commit()
@@ -869,7 +883,7 @@ def get_upcoming_events(limit=3):
     return upcoming
 
 def export_to_csv():
-    desktop_dir = _desktop_dir()
+    desktop_dir = Path.home() / "Desktop"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_path = desktop_dir / f"gamification_export_{timestamp}.csv"
 
@@ -896,55 +910,43 @@ def export_to_csv():
     return str(file_path)
 
 def get_documents(category_filter: str = "All"):
-    # v2 get_documents
     conn = get_connection()
     cursor = conn.cursor()
     query = """
-        SELECT id, category, doc_type, title, doc_number, secondary_info, issue_date,
-               expiration_date, notes, COALESCE(extra_fields, '[]')
-        FROM personal_documents
+        SELECT id, category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, COALESCE(extra_fields, '[]') 
+        FROM personal_documents 
         WHERE active = 1
     """
     if category_filter != "All":
-        cursor.execute(query + " AND category = ? ORDER BY id DESC", (category_filter,))
+        query += " AND category = ?"
+        cursor.execute(query + " ORDER BY id DESC", (category_filter,))
     else:
         cursor.execute(query + " ORDER BY id DESC")
+        
     rows = cursor.fetchall()
     conn.close()
-
-    out = []
-    for r in rows:
-        r = list(r)
-        for i in (4, 5, 8, 9):  # doc_number, secondary_info, notes, extra_fields
-            r[i] = secure.decrypt(r[i])
-        out.append(tuple(r))
-    return out
+    return rows
 
 def add_document(category: str, doc_type: str, title: str, doc_number: str, secondary_info: str = "", issue_date: str = "", expiration_date: str = "", notes: str = "", extra_fields: str = "[]"):
-    # v2 add_document
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO personal_documents (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (category, doc_type, title, secure.encrypt(doc_number), secure.encrypt(secondary_info),
-          issue_date, expiration_date, secure.encrypt(notes), secure.encrypt(extra_fields)))
+    """, (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields))
     doc_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return doc_id
 
 def update_document(doc_id: int, category: str, doc_type: str, title: str, doc_number: str, secondary_info: str, issue_date: str, expiration_date: str, notes: str, extra_fields: str = "[]"):
-    # v2 update_document
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        UPDATE personal_documents
-        SET category = ?, doc_type = ?, title = ?, doc_number = ?, secondary_info = ?,
-            issue_date = ?, expiration_date = ?, notes = ?, extra_fields = ?
+        UPDATE personal_documents 
+        SET category = ?, doc_type = ?, title = ?, doc_number = ?, secondary_info = ?, issue_date = ?, expiration_date = ?, notes = ?, extra_fields = ?
         WHERE id = ?
-    """, (category, doc_type, title, secure.encrypt(doc_number), secure.encrypt(secondary_info),
-          issue_date, expiration_date, secure.encrypt(notes), secure.encrypt(extra_fields), doc_id))
+    """, (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields, doc_id))
     conn.commit()
     conn.close()
 
@@ -1034,177 +1036,3 @@ def backup_db(keep: int = 14):
         except OSError:
             pass
     return str(dst)
-
-# ==========================================================================
-# v2: XP ledger, schema migrations, helpers
-# ==========================================================================
-def _ledger_set(cursor, source: str, ref_key: str, event_date: str, amount: float,
-                meta=None, replace: bool = True):
-    """Records an XP entry. replace=False keeps the original entry (and date) if it exists."""
-    if replace:
-        cursor.execute("""
-            INSERT INTO xp_ledger (event_date, source, ref_key, amount, meta)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(source, ref_key) DO UPDATE SET
-                event_date = excluded.event_date, amount = excluded.amount, meta = excluded.meta
-        """, (event_date, source, ref_key, amount, meta))
-    else:
-        cursor.execute("""
-            INSERT OR IGNORE INTO xp_ledger (event_date, source, ref_key, amount, meta)
-            VALUES (?, ?, ?, ?, ?)
-        """, (event_date, source, ref_key, amount, meta))
-
-
-def _ledger_clear(cursor, source: str, ref_key: str):
-    cursor.execute("DELETE FROM xp_ledger WHERE source = ? AND ref_key = ?", (source, ref_key))
-
-
-def _refresh_habit_day(cursor, year: int, week: int, day_idx: int):
-    """Recomputes the net habit XP of one day: (daily average - 5) * 2."""
-    try:
-        day = date.fromisocalendar(year, week, day_idx + 1).isoformat()
-    except ValueError:
-        return
-    avg = cursor.execute("""
-        SELECT AVG(l.score) FROM daily_logs l
-        JOIN activities a ON l.activity_id = a.id
-        WHERE a.active = 1 AND l.score IS NOT NULL
-          AND l.year = ? AND l.week_number = ? AND l.day_of_week = ?
-    """, (year, week, day_idx)).fetchone()[0]
-
-    if avg is None:
-        _ledger_clear(cursor, "habit_day", day)
-    else:
-        _ledger_set(cursor, "habit_day", day, day, (avg - 5.0) * 2.0, meta=avg)
-
-
-def get_weekly_xp(num_weeks: int = 8):
-    """Net XP earned per ISO week, from the ledger: [(year, week, xp), ...]."""
-    conn = get_connection()
-    rows = conn.execute("SELECT event_date, amount FROM xp_ledger").fetchall()
-    conn.close()
-    weeks = {}
-    for d, amount in rows:
-        try:
-            iso = date.fromisoformat(d).isocalendar()
-        except ValueError:
-            continue
-        key = (iso[0], iso[1])
-        weeks[key] = weeks.get(key, 0.0) + amount
-    return [(y, w, xp) for (y, w), xp in sorted(weeks.items())][-num_weeks:]
-
-
-def _backfill_xp_ledger(conn):
-    """One-time import of the history that used to be recalculated on the fly."""
-    ins = ("INSERT OR IGNORE INTO xp_ledger (event_date, source, ref_key, amount, meta) "
-           "VALUES (?, ?, ?, ?, ?)")
-    fallback = "date('now', 'localtime')"
-
-    rows = conn.execute("""
-        SELECT l.year, l.week_number, l.day_of_week, AVG(l.score)
-        FROM daily_logs l JOIN activities a ON l.activity_id = a.id
-        WHERE a.active = 1 AND l.score IS NOT NULL
-        GROUP BY l.year, l.week_number, l.day_of_week
-    """).fetchall()
-    for y, w, d, avg in rows:
-        try:
-            day = date.fromisocalendar(y, w, d + 1).isoformat()
-        except ValueError:
-            continue
-        conn.execute(ins, (day, "habit_day", day, (avg - 5.0) * 2.0, avg))
-
-    for tid, day in conn.execute(
-        f"SELECT id, COALESCE(date(completed_at), {fallback}) FROM tasks "
-        "WHERE status = 'Complete' AND active = 1"
-    ).fetchall():
-        conn.execute(ins, (day, "quest", str(tid), XP_QUEST, None))
-
-    for sid, day in conn.execute(
-        f"SELECT id, COALESCE(date(updated_at), {fallback}) FROM study_sessions "
-        "WHERE status = 'Mastered' AND active = 1"
-    ).fetchall():
-        conn.execute(ins, (day, "study", str(sid), XP_STUDY, None))
-
-    for eid, day in conn.execute(
-        "SELECT event_id, completion_date FROM event_completions WHERE completed = 1"
-    ).fetchall():
-        conn.execute(ins, (day, "event", f"{eid}:{day}", XP_EVENT, None))
-
-    for lid, day, xp in conn.execute(
-        f"SELECT id, COALESCE(date(created_at), {fallback}), xp_awarded FROM quest_progress_logs"
-    ).fetchall():
-        conn.execute(ins, (day, "note", str(lid), xp, None))
-
-
-def _to_iso(date_str: str) -> str:
-    d = parse_flexible_date(date_str)
-    return d.isoformat() if d else (date_str or "")
-
-
-def _run_v2_migrations(conn):
-    # 1. daily_logs: one row per (activity, day) -> allows a real upsert
-    conn.execute("""
-        DELETE FROM daily_logs WHERE id NOT IN (
-            SELECT MAX(id) FROM daily_logs GROUP BY activity_id, year, week_number, day_of_week
-        )
-    """)
-    conn.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_logs_day
-        ON daily_logs (activity_id, year, week_number, day_of_week)
-    """)
-
-    # 2. XP ledger (+ one-time backfill so the current level does not change)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS xp_ledger (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_date TEXT NOT NULL,
-            source TEXT NOT NULL,
-            ref_key TEXT NOT NULL,
-            amount REAL NOT NULL,
-            meta REAL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(source, ref_key)
-        )
-    """)
-    flag = conn.execute("SELECT value FROM hud_settings WHERE key = 'xp_ledger_backfilled'").fetchone()
-    if not flag:
-        _backfill_xp_ledger(conn)
-        conn.execute("INSERT OR REPLACE INTO hud_settings (key, value) VALUES ('xp_ledger_backfilled', '1')")
-
-    # 3. Document dates -> ISO (YYYY-MM-DD); the UI shows them as DD-MM-YY
-    for doc_id, issue, exp in conn.execute(
-        "SELECT id, issue_date, expiration_date FROM personal_documents"
-    ).fetchall():
-        new_issue, new_exp = _to_iso(issue), _to_iso(exp)
-        if (new_issue, new_exp) != (issue, exp):
-            conn.execute("UPDATE personal_documents SET issue_date = ?, expiration_date = ? WHERE id = ?",
-                         (new_issue, new_exp, doc_id))
-
-    # 4. Encrypt sensitive document fields that are still plain text
-    if secure.AVAILABLE:
-        for doc_id, num, sec, notes, extra in conn.execute(
-            "SELECT id, doc_number, secondary_info, notes, extra_fields FROM personal_documents"
-        ).fetchall():
-            new = [secure.encrypt(v) for v in (num, sec, notes, extra)]
-            if new != [num, sec, notes, extra]:
-                conn.execute(
-                    "UPDATE personal_documents SET doc_number = ?, secondary_info = ?, notes = ?, "
-                    "extra_fields = ? WHERE id = ?", (*new, doc_id))
-
-
-def _desktop_dir() -> Path:
-    """Real Desktop folder (handles OneDrive redirection); falls back to AppData."""
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as k:
-            p = Path(os.path.expandvars(winreg.QueryValueEx(k, "Desktop")[0]))
-            if p.is_dir():
-                return p
-    except Exception:
-        pass
-    for cand in (Path.home() / "Desktop", Path.home() / "OneDrive" / "Desktop",
-                 Path.home() / "OneDrive" / "Área de Trabalho"):
-        if cand.is_dir():
-            return cand
-    return Path(get_db_path()).parent

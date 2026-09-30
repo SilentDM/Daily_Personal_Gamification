@@ -1,6 +1,5 @@
 import flet as ft
 import database as db
-from datetime import date, timedelta
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 from constants import (
     SCORE_GREEN,
@@ -24,8 +23,7 @@ class ScheduleView(ft.Column):
         super().__init__(scroll=ft.ScrollMode.AUTO, expand=True)
         self.app_page = page
         self.daily_score_texts = {}
-        self.viewing_current = True
-        self._sync_week()
+        self.year, self.week, self.today_idx = db.get_current_week_info()
 
         # Gamification banner elements
         self.streak_text = ft.Text("🔥 0 Days Streak", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_ACCENT)
@@ -51,7 +49,7 @@ class ScheduleView(ft.Column):
             self.xp_fraction_text.value = f"{xp_in_level:.1f} / 10 XP to Lvl {level + 1} (Total: {total_xp:.1f} / 1000)"
 
     def calculate_daily_scores(self):
-        self._sync_week()
+        self.year, self.week, self.today_idx = db.get_current_week_info()
         logs = db.get_current_week_logs(self.year, self.week)
         active_ids = {a[0] for a in db.get_activities()}
         
@@ -98,8 +96,6 @@ class ScheduleView(ft.Column):
         update_desktop_wallpaper()
 
     def quick_fill_today(self, e):
-        if not self.viewing_current:
-            return  # Quick-Fill only makes sense for today
         logs = db.get_current_week_logs(self.year, self.week)
         activities = db.get_activities()
 
@@ -120,38 +116,9 @@ class ScheduleView(ft.Column):
         e.control.icon = ft.Icons.CHECK
         self.app_page.update()
 
-    def _sync_week(self):
-        """Keeps the displayed week; follows the real week while viewing the current one."""
-        cur_year, cur_week, real_today = db.get_current_week_info()
-        if self.viewing_current:
-            self.year, self.week = cur_year, cur_week
-        # highlight "today" only when the displayed week is the current one
-        self.today_idx = real_today if self.viewing_current else -1
-
-    def _shift_week(self, delta: int):
-        monday = date.fromisocalendar(self.year, self.week, 1) + timedelta(weeks=delta)
-        y, w, _ = monday.isocalendar()
-        cur_year, cur_week, _ = db.get_current_week_info()
-        if (y, w) > (cur_year, cur_week):
-            return  # no logging in the future
-        self.year, self.week = y, w
-        self.viewing_current = ((y, w) == (cur_year, cur_week))
-        self.render()
-        self.calculate_daily_scores()
-
-    def _go_current_week(self):
-        self.viewing_current = True
-        self.render()
-        self.calculate_daily_scores()
-
-    def _week_range_label(self):
-        start = date.fromisocalendar(self.year, self.week, 1)
-        end = start + timedelta(days=6)
-        return f"{start:%d/%m} - {end:%d/%m}"
-
     def render(self):
         self.controls.clear()
-        self._sync_week()
+        self.year, self.week, self.today_idx = db.get_current_week_info()
         logs = db.get_current_week_logs(self.year, self.week)
         activities = db.get_activities()
 
@@ -192,19 +159,8 @@ class ScheduleView(ft.Column):
         self.controls.append(
             ft.Container(
                 content=ft.Row([
-                    ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=ft.Colors.CYAN_ACCENT, tooltip="Previous week",
-                                  on_click=lambda e: self._shift_week(-1)),
                     ft.Text(f"Week {self.week} ({self.year})", size=22, weight=ft.FontWeight.BOLD),
-                    ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=ft.Colors.CYAN_ACCENT, tooltip="Next week",
-                                  disabled=self.viewing_current, on_click=lambda e: self._shift_week(1)),
-                    ft.Text(self._week_range_label(), size=14, color=ft.Colors.GREY_400),
-                    ft.Text(
-                        f"• Today is {DAY_NAMES[date.today().weekday()]}" if self.viewing_current
-                        else "• Editing a past week (XP updates accordingly)",
-                        size=15, color=ft.Colors.CYAN_ACCENT
-                    ),
-                    ft.Button(content="This week", icon=ft.Icons.TODAY, disabled=self.viewing_current,
-                              on_click=lambda e: self._go_current_week())
+                    ft.Text(f"• Today is {DAY_NAMES[self.today_idx]}", size=15, color=ft.Colors.CYAN_ACCENT)
                 ]),
                 padding=ft.Padding.only(left=20, top=5, bottom=5)
             )

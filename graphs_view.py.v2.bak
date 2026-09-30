@@ -170,58 +170,6 @@ class GraphsView(ft.Column):
             )
             self.controls.append(multi_week_section)
 
-        # 5b. XP earned per week (from the XP ledger)
-        weekly_xp = db.get_weekly_xp(num_weeks=8)
-        if weekly_xp:
-            import math
-            xp_groups, xp_labels = [], []
-            for idx, (yr, wk, xp) in enumerate(weekly_xp):
-                xp_color = ft.Colors.GREEN_ACCENT if xp >= 0 else ft.Colors.RED_ACCENT
-                xp_groups.append(
-                    fch.BarChartGroup(
-                        x=idx,
-                        rods=[fch.BarChartRod(from_y=0, to_y=xp, width=28, color=xp_color, border_radius=ft.BorderRadius.all(4))]
-                    )
-                )
-                xp_labels.append(fch.ChartAxisLabel(value=idx, label=ft.Text(f"W{wk}")))
-
-            hi = max(10.0, max(x for _, _, x in weekly_xp))
-            lo = min(0.0, min(x for _, _, x in weekly_xp))
-            step = max(5, int(math.ceil((hi - lo) / 5 / 5.0) * 5))
-            y_max = int(math.ceil(hi / step) * step)
-            y_min = int(math.floor(lo / step) * step)
-
-            xp_chart = fch.BarChart(
-                groups=xp_groups,
-                border=ft.Border.all(1, ft.Colors.GREY_800),
-                left_axis=fch.ChartAxis(
-                    labels=[fch.ChartAxisLabel(value=v, label=ft.Text(str(v))) for v in range(y_min, y_max + 1, step)],
-                    label_size=36
-                ),
-                bottom_axis=fch.ChartAxis(labels=xp_labels, label_size=30),
-                horizontal_grid_lines=fch.ChartGridLines(color=ft.Colors.GREY_800, interval=step),
-                min_y=y_min,
-                max_y=y_max,
-                interactive=True,
-                expand=True
-            )
-
-            self.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Text("XP Earned per Week", size=16, weight=ft.FontWeight.BOLD),
-                            ft.Text("Net XP: habits + quests + studies + events", size=12, color=ft.Colors.GREY_400)
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                        ft.Container(content=xp_chart, height=200, padding=10)
-                    ]),
-                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                    border_radius=10,
-                    padding=15,
-                    margin=ft.Margin.symmetric(horizontal=20, vertical=5)
-                )
-            )
-
         # 6. Section 3: Category Breakdown & Habit Insights
         cat_bars = []
         for cat, pct in insights["category_scores"].items():

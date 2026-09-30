@@ -1,6 +1,5 @@
 import os
 import ctypes
-import logging
 import textwrap
 import threading
 import database as db
@@ -259,7 +258,7 @@ def update_desktop_wallpaper():
         final_img.save(str(wallpaper_path), "BMP")
         ctypes.windll.user32.SystemParametersInfoW(20, 0, str(wallpaper_path), 3)
     except Exception as ex:
-        logging.getLogger("gamification").exception("Wallpaper update error")
+        print(f"Wallpaper update error: {ex}")
 
 # --- Debounced / background wallpaper refresh ---
 _timer = None

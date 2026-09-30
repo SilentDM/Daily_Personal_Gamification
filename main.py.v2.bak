@@ -34,7 +34,6 @@ import winsound
 from datetime import datetime, date
 from PIL import Image, ImageDraw
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update
-from applog import setup_logging
 
 from schedule_view import ScheduleView
 from graphs_view import GraphsView
@@ -45,7 +44,6 @@ from calendar_view import CalendarView
 from documents_view import DocumentsView
 
 APP_TITLE = "Personal Gamification Tracker"
-log = setup_logging()
 
 TRAY_INITIALIZED = False
 tray_icon_instance = None
@@ -128,7 +126,7 @@ def main(page: ft.Page):
     try:
         db.backup_db()  # backup BEFORE migrations touch the database
     except Exception:
-        log.exception("Daily backup failed")  # never stop the app from starting
+        pass  # a failed backup must never stop the app from starting
 
     db.init_db()
 
@@ -309,32 +307,30 @@ def main(page: ft.Page):
                     last_checked_hour = now.hour
                     update_desktop_wallpaper()
 
-                # 3. Calendar Event Reminders (robust to sleep/resume, skips completed events)
-                for ev in db.get_events_for_date(today):
+                # 3. Calendar Event Reminders
+                events = db.get_events_for_date(today)
+                for ev in events:
                     eid, title, _, hour, _ = ev
-                    if db.is_event_completed(eid, today_str):
-                        continue
                     event_dt = datetime(today.year, today.month, today.day, hour, 0, 0)
-                    delta_min = (event_dt - now).total_seconds() / 60.0
+                    delta_sec = (event_dt - now).total_seconds()
+                    delta_min = delta_sec / 60.0
 
-                    if 0.0 < delta_min <= 15.0:
+                    if 13.0 <= delta_min <= 16.0:
                         key = (eid, today_str, "15m")
                         if key not in NOTIFIED_ALARMS:
                             NOTIFIED_ALARMS.add(key)
                             winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-                            try:  # unobtrusive: tray notification, no focus stealing
-                                tray_icon_instance.notify(
-                                    f"'{title}' starts at {hour:02d}:00 (in {int(delta_min) + 1} min)",
-                                    "Upcoming appointment"
-                                )
-                            except Exception:
-                                log.exception("tray notification failed")
+                            restore_window_from_tray(page)
+                            show_alarm_dialog(
+                                "⏰ Upcoming Appointment (in 15m)",
+                                f"'{title}' is scheduled for {hour:02d}:00!",
+                                eid, today_str
+                            )
 
-                    elif -30.0 <= delta_min <= 0.0:
+                    elif -2.0 <= delta_min <= 3.0:
                         key = (eid, today_str, "0m")
                         if key not in NOTIFIED_ALARMS:
                             NOTIFIED_ALARMS.add(key)
-                            NOTIFIED_ALARMS.add((eid, today_str, "15m"))
                             winsound.MessageBeep(winsound.MB_ICONASTERISK)
                             restore_window_from_tray(page)
                             show_alarm_dialog(
@@ -343,7 +339,7 @@ def main(page: ft.Page):
                                 eid, today_str
                             )
             except Exception:
-                log.exception("reminder loop failed")
+                pass
 
     threading.Thread(target=reminder_loop, daemon=True).start()
 

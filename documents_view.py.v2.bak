@@ -1,7 +1,6 @@
 import flet as ft
 import json
 import subprocess
-import threading
 from datetime import datetime, date
 import database as db
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
@@ -41,8 +40,16 @@ def copy_to_windows_clipboard(text: str):
             pass
 
 def parse_flexible_date(date_str: str):
-    # v2 parse_flexible_date
-    return db.parse_flexible_date(date_str)  # single implementation lives in database.py
+    """Parses date string supporting dd-mm-yy, dd-mm-yyyy, dd/mm/yy, yyyy-mm-dd."""
+    if not date_str or not date_str.strip():
+        return None
+    clean = date_str.strip().replace("/", "-")
+    for fmt in ("%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(clean, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 def format_to_dd_mm_yy(date_str: str) -> str:
     """Converts any recognized date string to dd-mm-yy format."""
@@ -50,18 +57,6 @@ def format_to_dd_mm_yy(date_str: str) -> str:
     if d:
         return d.strftime("%d-%m-%y")
     return date_str.strip()
-
-def clear_clipboard_if_unchanged(text: str):
-    """Wipes the clipboard 30s after copying a document number (only if still ours)."""
-    try:
-        cur = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
-            capture_output=True, text=True, timeout=10, creationflags=0x08000000
-        ).stdout.strip()
-        if cur == text.strip():
-            subprocess.run("clip", input=b"", creationflags=0x08000000)
-    except Exception:
-        pass
 
 def mask_number(val: str) -> str:
     clean = val.strip()
@@ -127,27 +122,11 @@ class DocumentsView(ft.Column):
         self.render()
 
     def handle_copy(self, val: str, btn: ft.IconButton):
-        # v2 handle_copy
         copy_to_windows_clipboard(val)
-        restore_icon = ft.Icons.COPY_ALL_ROUNDED if btn.icon_size == 18 else ft.Icons.COPY
         btn.icon = ft.Icons.CHECK
         btn.icon_color = ft.Colors.GREEN_ACCENT
         if self.app_page:
             self.app_page.update()
-
-        def _restore():
-            try:
-                btn.icon = restore_icon
-                btn.icon_color = ft.Colors.CYAN_ACCENT
-                if self.app_page:
-                    self.app_page.update()
-            except Exception:
-                pass
-
-        for delay, fn, args in ((2.0, _restore, ()), (30.0, clear_clipboard_if_unchanged, (val,))):
-            t = threading.Timer(delay, fn, args=args)
-            t.daemon = True
-            t.start()
 
     def delete_doc(self, doc_id: int):
         db.delete_document(doc_id)
@@ -229,19 +208,8 @@ class DocumentsView(ft.Column):
         extra_fields_json = json.dumps(clean_fields)
 
         # Standardize dates
-        issue_raw = self.issue_input.value.strip()
-        exp_raw = self.expiration_input.value.strip()
-        issue_d = parse_flexible_date(issue_raw) if issue_raw else None
-        exp_d = parse_flexible_date(exp_raw) if exp_raw else None
-        self.issue_input.error_text = "Invalid date (use DD-MM-YY)" if issue_raw and not issue_d else None
-        self.expiration_input.error_text = "Invalid date (use DD-MM-YY)" if exp_raw and not exp_d else None
-        if self.issue_input.error_text or self.expiration_input.error_text:
-            if self.app_page:
-                self.app_page.update()
-            return
-        # stored as ISO (YYYY-MM-DD); displayed as DD-MM-YY
-        issue_clean = issue_d.isoformat() if issue_d else ""
-        exp_clean = exp_d.isoformat() if exp_d else ""
+        issue_clean = format_to_dd_mm_yy(self.issue_input.value) if self.issue_input.value.strip() else ""
+        exp_clean = format_to_dd_mm_yy(self.expiration_input.value) if self.expiration_input.value.strip() else ""
 
         if self.editing_doc_id is not None:
             db.update_document(

@@ -214,8 +214,7 @@ class CalendarView(ft.Column):
                 options=[
                     ft.DropdownOption("One-Time"),
                     ft.DropdownOption("Weekly"),
-                    ft.DropdownOption("Monthly"),
-                    ft.DropdownOption("Yearly")
+                    ft.DropdownOption("Monthly")
                 ]
             )
 
@@ -225,8 +224,6 @@ class CalendarView(ft.Column):
                     rec = "weekly"
                 elif rec_dropdown.value == "Monthly":
                     rec = "monthly"
-                elif rec_dropdown.value == "Yearly":
-                    rec = "yearly"
                 self.save_scheduled_event(title_input.value, rec)
 
             scheduler_card = ft.Container(
