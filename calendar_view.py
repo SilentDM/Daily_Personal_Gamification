@@ -3,6 +3,7 @@ import calendar
 from datetime import datetime, date
 import database as db
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from ui_helpers import confirm_action
 
 MONTH_NAMES = [
     "", "January", "February", "March", "April", "May", "June",
@@ -129,6 +130,9 @@ class CalendarView(ft.Column):
         # 3. Monthly Calendar Grid
         month_matrix = calendar.monthcalendar(self.view_year, self.view_month)
         today = date.today()
+        last_day = calendar.monthrange(self.view_year, self.view_month)[1]
+        month_events = db.get_events_between(date(self.view_year, self.view_month, 1),
+                                             date(self.view_year, self.view_month, last_day))
 
         grid_column = ft.Column(spacing=8, alignment=ft.MainAxisAlignment.CENTER)
 
@@ -140,7 +144,7 @@ class CalendarView(ft.Column):
                 else:
                     cell_date = date(self.view_year, self.view_month, day_num)
                     is_today = (cell_date == today)
-                    events = db.get_events_for_date(cell_date)
+                    events = month_events[cell_date]
 
                     event_chips = []
                     for ev in events[:2]:
@@ -263,6 +267,7 @@ class CalendarView(ft.Column):
 
         hours_column = ft.Column(spacing=4)
         date_str = self.selected_date.strftime("%Y-%m-%d")
+        completed = db.get_completed_events(date_str, date_str)
 
         for h in range(24):
             is_active_selection = (h == self.scheduling_hour)
@@ -286,7 +291,7 @@ class CalendarView(ft.Column):
                 for ev in hour_events:
                     eid, title, _, _, rec = ev
                     rec_badge = f" • [{rec.capitalize()}]" if rec != "none" else ""
-                    is_done = db.is_event_completed(eid, date_str)
+                    is_done = (eid, date_str) in completed
 
                     def make_toggle(event_id=eid, d_str=date_str):
                         return lambda e: self.toggle_done(event_id, d_str)
@@ -318,7 +323,10 @@ class CalendarView(ft.Column):
                                 icon_size=18,
                                 icon_color=ft.Colors.RED_400,
                                 tooltip="Delete Event",
-                                on_click=lambda e, i=eid: self.delete_event_clicked(i)
+                                on_click=lambda e, i=eid, t=title: confirm_action(
+                                    self.app_page, "Delete event?",
+                                    f"'{t}' will be removed (including all its recurrences).",
+                                    lambda: self.delete_event_clicked(i))
                             )
                         ], spacing=8)
                     )

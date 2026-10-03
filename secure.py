@@ -37,19 +37,33 @@ def _key_file() -> Path:
 
 
 def _load_key() -> bytes:
+    path = _key_file()
     try:
         import keyring
-        stored = keyring.get_password(SERVICE, ACCOUNT)
+    except ImportError:
+        keyring = None  # not installed -> key file only
+
+    if keyring is not None:
+        try:
+            stored = keyring.get_password(SERVICE, ACCOUNT)
+        except Exception:
+            # Credential Manager errored: a key may well exist there, so never
+            # generate a new one (that would orphan everything already encrypted).
+            if path.exists():
+                return path.read_bytes().strip()
+            log.exception("keyring unavailable and no key file: refusing to create a new key")
+            raise RuntimeError("Encryption key unavailable (Windows Credential Manager error)")
         if stored:
             return stored.encode()
-        if not _key_file().exists():
+        if not path.exists():
             key = Fernet.generate_key()
-            keyring.set_password(SERVICE, ACCOUNT, key.decode())
+            try:
+                keyring.set_password(SERVICE, ACCOUNT, key.decode())
+            except Exception:
+                log.warning("Could not store the key in keyring; using a key file")
+                path.write_bytes(key)
             return key
-    except Exception:
-        pass  # keyring missing or broken -> key file fallback
 
-    path = _key_file()
     if path.exists():
         return path.read_bytes().strip()
     key = Fernet.generate_key()

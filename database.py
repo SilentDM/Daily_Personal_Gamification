@@ -1,4 +1,4 @@
-import sqlite3, os, csv, json, shutil
+import sqlite3, os, csv, json, shutil, logging
 import calendar as _calendar
 import secure
 from pathlib import Path
@@ -205,6 +205,13 @@ def delete_activity(activity_id: int):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE activities SET active = 0 WHERE id = ?", (activity_id,))
+    # the daily averages (and their XP) only count active habits
+    days = cursor.execute(
+        "SELECT DISTINCT year, week_number, day_of_week FROM daily_logs WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchall()
+    for year, week, day_idx in days:
+        _refresh_habit_day(cursor, year, week, day_idx)
     conn.commit()
     conn.close()
 
@@ -526,13 +533,21 @@ def get_tasks():
         ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, sort_order ASC, id DESC
     """)
     rows = cursor.fetchall()
+    subs_by_task = {}
+    for task_id, *sub in cursor.execute("""
+        SELECT task_id, id, title, status, sort_order
+        FROM subtasks
+        WHERE active = 1
+        ORDER BY sort_order ASC, id ASC
+    """):
+        subs_by_task.setdefault(task_id, []).append(tuple(sub))
     conn.close()
 
     result = []
     for r in rows:
         task_id = r[0]
         status = r[2]
-        subtasks = get_subtasks(task_id)
+        subtasks = subs_by_task.get(task_id, [])
 
         if subtasks:
             total_weight = sum(SUBQUEST_WEIGHTS.get(s[2], 0.0) for s in subtasks)
@@ -775,40 +790,57 @@ def delete_calendar_event(event_id: int):
     conn.commit()
     conn.close()
 
-def get_events_for_date(target_date: date):
+def _event_occurs_on(start_d: date, rec: str, target_date: date) -> bool:
+    if target_date < start_d:
+        return False
+    if rec == "none":
+        return start_d == target_date
+    if rec == "weekly":
+        return start_d.weekday() == target_date.weekday()
+    # an event on the 31st falls on the last day of shorter months
+    last_day = _calendar.monthrange(target_date.year, target_date.month)[1]
+    if rec == "monthly":
+        return target_date.day == min(start_d.day, last_day)
+    if rec == "yearly":
+        return target_date.month == start_d.month and target_date.day == min(start_d.day, last_day)
+    return False
+
+def get_events_between(start_date: date, end_date: date):
+    """{date: [(id, title, event_date, start_hour, recurrence), ...]} for every day in the range."""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    rows = conn.execute("""
         SELECT id, title, event_date, start_hour, recurrence
         FROM calendar_events
         WHERE active = 1 AND event_date <= ?
         ORDER BY start_hour ASC
-    """, (target_date.strftime("%Y-%m-%d"),))
-    rows = cursor.fetchall()
+    """, (end_date.isoformat(),)).fetchall()
     conn.close()
 
-    last_day = _calendar.monthrange(target_date.year, target_date.month)[1]
-    matching_events = []
+    parsed = []
     for r in rows:
-        _, _, start_date_str, _, rec = r
-        start_d = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        try:
+            parsed.append((datetime.strptime(r[2], "%Y-%m-%d").date(), r))
+        except ValueError:
+            continue
 
-        if rec == "none":
-            match = start_d == target_date
-        elif rec == "weekly":
-            match = start_d.weekday() == target_date.weekday()
-        elif rec == "monthly":
-            # an event on the 31st falls on the last day of shorter months
-            match = target_date.day == min(start_d.day, last_day)
-        elif rec == "yearly":
-            match = (target_date.month == start_d.month
-                     and target_date.day == min(start_d.day, last_day))
-        else:
-            match = False
+    result = {}
+    for ordinal in range(start_date.toordinal(), end_date.toordinal() + 1):
+        day = date.fromordinal(ordinal)
+        result[day] = [r for start_d, r in parsed if _event_occurs_on(start_d, r[4], day)]
+    return result
 
-        if match:
-            matching_events.append(r)
-    return matching_events
+def get_events_for_date(target_date: date):
+    return get_events_between(target_date, target_date)[target_date]
+
+def get_completed_events(start_str: str, end_str: str):
+    """Set of (event_id, 'YYYY-MM-DD') completed within the date range."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT event_id, completion_date FROM event_completions WHERE completion_date BETWEEN ? AND ?",
+        (start_str, end_str),
+    ).fetchall()
+    conn.close()
+    return set(rows)
 
 def toggle_event_completion(event_id: int, date_str: str):
     conn = get_connection()
@@ -843,17 +875,18 @@ def get_upcoming_events(limit=3):
     today = now.date()
     current_hour = now.hour
     upcoming = []
+    last = date.fromordinal(today.toordinal() + 13)
+    events_by_day = get_events_between(today, last)
+    completed = get_completed_events(today.isoformat(), last.isoformat())
 
-    for i in range(14):
-        check_date = date.fromordinal(today.toordinal() + i)
-        day_events = get_events_for_date(check_date)
+    for check_date, day_events in sorted(events_by_day.items()):
         date_str = check_date.strftime("%Y-%m-%d")
 
         for ev in day_events:
             eid, title, _, start_hour, rec = ev
             if check_date == today and start_hour < current_hour:
                 continue
-            if is_event_completed(eid, date_str):
+            if (eid, date_str) in completed:
                 continue
             upcoming.append((check_date, title, start_hour, rec))
             if len(upcoming) >= limit:
@@ -1175,15 +1208,19 @@ def _run_v2_migrations(conn):
                          (new_issue, new_exp, doc_id))
 
     # 4. Encrypt sensitive document fields that are still plain text
+    #    (skipped, not fatal, if the key is unavailable: retried on the next start)
     if secure.AVAILABLE:
-        for doc_id, num, sec, notes, extra in conn.execute(
-            "SELECT id, doc_number, secondary_info, notes, extra_fields FROM personal_documents"
-        ).fetchall():
-            new = [secure.encrypt(v) for v in (num, sec, notes, extra)]
-            if new != [num, sec, notes, extra]:
-                conn.execute(
-                    "UPDATE personal_documents SET doc_number = ?, secondary_info = ?, notes = ?, "
-                    "extra_fields = ? WHERE id = ?", (*new, doc_id))
+        try:
+            for doc_id, num, sec, notes, extra in conn.execute(
+                "SELECT id, doc_number, secondary_info, notes, extra_fields FROM personal_documents"
+            ).fetchall():
+                new = [secure.encrypt(v) for v in (num, sec, notes, extra)]
+                if new != [num, sec, notes, extra]:
+                    conn.execute(
+                        "UPDATE personal_documents SET doc_number = ?, secondary_info = ?, notes = ?, "
+                        "extra_fields = ? WHERE id = ?", (*new, doc_id))
+        except RuntimeError:
+            logging.getLogger("gamification").exception("Document encryption migration skipped")
 
 
 def _desktop_dir() -> Path:

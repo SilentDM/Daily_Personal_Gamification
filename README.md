@@ -71,6 +71,8 @@ Daily_Personal_Gamification/
 ├── documents_view.py   # Personal documents vault
 ├── wallpaper.py        # Wallpaper HUD renderer
 ├── wallpaper_view.py   # HUD settings screen
+├── ui_helpers.py       # Shared confirmation dialog
+├── tests/              # Database layer tests (unittest)
 ├── base_wallpaper.jpg  # Background image for the HUD
 └── requirements.txt
 ```
@@ -107,6 +109,12 @@ pip install -r requirements.txt
 ```bash
 python main.py
 ```
+
+### 5. Run the tests
+```bash
+python -m unittest discover tests
+```
+Tests use a temporary data folder, so your real database is never touched.
 
 ---
 

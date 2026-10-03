@@ -68,7 +68,7 @@ def wrap_bullet_lines(text: str, max_chars: int = 42):
         lines.append(f"   {sub}")
     return lines
 
-def update_desktop_wallpaper():
+def render_wallpaper():
     """Generates the customizable HUD overlay with dynamic multi-line text and studies."""
     try:
         settings = db.get_hud_settings()
@@ -269,7 +269,7 @@ _render_lock = threading.Lock()
 
 def _run_update():
     with _render_lock:
-        update_desktop_wallpaper()
+        render_wallpaper()
 
 
 def request_wallpaper_update(delay: float = 2.0):

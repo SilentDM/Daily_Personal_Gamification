@@ -247,21 +247,14 @@ def main(page: ft.Page):
     def show_alarm_dialog(title_text: str, subtitle: str, event_id: int, date_str: str):
         def mark_done(e):
             db.toggle_event_completion(event_id, date_str)
-            if hasattr(page, "close"):
-                page.close(dlg)
-            else:
-                dlg.open = False
+            page.pop_dialog()
             calendar_view.render()
             schedule_view.update_gamification_stats()
             update_desktop_wallpaper()
             page.update()
 
         def dismiss(e):
-            if hasattr(page, "close"):
-                page.close(dlg)
-            else:
-                dlg.open = False
-            page.update()
+            page.pop_dialog()
 
         dlg = ft.AlertDialog(
             title=ft.Row([
@@ -277,12 +270,7 @@ def main(page: ft.Page):
                 ft.Button("I Did It! (+10 XP)", icon=ft.Icons.CHECK, on_click=mark_done)
             ]
         )
-        if hasattr(page, "open"):
-            page.open(dlg)
-        else:
-            page.dialog = dlg
-            dlg.open = True
-            page.update()
+        page.show_dialog(dlg)
 
     def reminder_loop():
         last_checked_day = date.today()

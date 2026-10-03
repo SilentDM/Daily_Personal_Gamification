@@ -1,6 +1,7 @@
 import flet as ft
 import database as db
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from ui_helpers import confirm_action
 from constants import XP_STUDY
 
 MASTERED_LABEL = f"Mastered (+{XP_STUDY} XP)"
@@ -256,11 +257,18 @@ class StudyView(ft.Row):
             if self.app_page:
                 self.app_page.update()
 
-        def delete_clicked(e):
+        def delete_session():
             db.delete_study_session(self.selected_session_id)
             self.selected_session_id = None
             self.refresh_list()
             update_desktop_wallpaper()
+            if self.app_page:
+                self.app_page.update()
+
+        def delete_clicked(e):
+            confirm_action(self.app_page, "Delete chapter?",
+                           f"'{self.topic_title_input.value}' and all its notes will be removed.",
+                           delete_session)
 
         self.editor_container.controls = [
             ft.Row([

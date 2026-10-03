@@ -2,6 +2,7 @@ import flet as ft
 import database as db
 from datetime import date, timedelta
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from ui_helpers import confirm_action
 from constants import (
     SCORE_GREEN,
     SCORE_ORANGE,
@@ -334,7 +335,10 @@ class ScheduleView(ft.Column):
                             icon_color=ft.Colors.RED_400,
                             icon_size=18,
                             tooltip="Delete activity",
-                            on_click=lambda e, a=act_id: self.on_delete_activity(a)
+                            on_click=lambda e, a=act_id, n=act_name: confirm_action(
+                                self.app_page, "Delete habit?",
+                                f"'{n}' will be removed from the grid, charts and daily XP.",
+                                lambda: self.on_delete_activity(a))
                         )
                     ], spacing=0, alignment=ft.MainAxisAlignment.END),
                     width=110,

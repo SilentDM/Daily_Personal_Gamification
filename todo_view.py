@@ -1,6 +1,7 @@
 import flet as ft
 import database as db
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from ui_helpers import confirm_action
 from constants import TASK_STAGES, QUEST_BONUS_XP
 
 STAGE_COLORS = {
@@ -158,27 +159,8 @@ class TodoView(ft.Column):
                 )
             )
 
-        # 4. Quest Cards (Safe Unpack for both 6 and 8 elements)
-        for task_data in raw_tasks:
-            task_id = task_data[0]
-            title = task_data[1]
-            status = task_data[2]
-            comp_yr = task_data[3]
-            comp_wk = task_data[4]
-            notes = task_data[5] if len(task_data) > 5 else ""
-
-            # Check if database returned 8 items or fallback
-            if len(task_data) >= 8:
-                subtasks = task_data[6]
-                progress_pct = task_data[7]
-            else:
-                subtasks = db.get_subtasks(task_id) if hasattr(db, "get_subtasks") else []
-                if subtasks:
-                    weights = {"Planning": 0.0, "Started": 25.0, "In Progress": 50.0, "Almost There": 75.0, "Complete": 100.0}
-                    total_w = sum(weights.get(s[2], 0.0) for s in subtasks)
-                    progress_pct = total_w / len(subtasks)
-                else:
-                    progress_pct = 100.0 if status == "Complete" else 0.0
+        # 4. Quest Cards
+        for task_id, title, status, comp_yr, comp_wk, notes, subtasks, progress_pct in raw_tasks:
 
             is_complete = (status == "Complete" or progress_pct >= 99.9)
             is_expanded = (task_id in self.expanded_tasks)
@@ -272,7 +254,10 @@ class TodoView(ft.Column):
                             icon_color=ft.Colors.RED_400,
                             icon_size=18,
                             tooltip="Delete Quest",
-                            on_click=lambda e, tid=task_id: self.on_delete_task(tid)
+                            on_click=lambda e, tid=task_id, t=title: confirm_action(
+                                self.app_page, "Delete quest?",
+                                f"'{t}' and its subquests will be removed.",
+                                lambda: self.on_delete_task(tid))
                         )
                     ], spacing=0, alignment=ft.MainAxisAlignment.END),
                     width=110,

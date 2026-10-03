@@ -5,6 +5,7 @@ import threading
 from datetime import datetime, date
 import database as db
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from ui_helpers import confirm_action
 
 CATEGORIES = ["All", "Identity", "Vehicles", "Housing & Finance", "Other"]
 
@@ -557,7 +558,9 @@ class DocumentsView(ft.Column):
                             icon_size=18,
                             icon_color=ft.Colors.RED_400,
                             tooltip="Delete Document",
-                            on_click=lambda e, did=doc_id: self.delete_doc(did)
+                            on_click=lambda e, did=doc_id, t=title: confirm_action(
+                                self.app_page, "Delete document?", f"'{t}' will be removed from the vault.",
+                                lambda: self.delete_doc(did))
                         )
                     ], spacing=0)
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
