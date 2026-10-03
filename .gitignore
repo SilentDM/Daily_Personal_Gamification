@@ -180,3 +180,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 Install.txt
+
+# Local backups / user data (the real database lives in %APPDATA%)
+*.bak
+*.db
+*.db-wal
+*.db-shm
+documents.key

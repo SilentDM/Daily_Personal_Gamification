@@ -41,7 +41,6 @@ def copy_to_windows_clipboard(text: str):
             pass
 
 def parse_flexible_date(date_str: str):
-    # v2 parse_flexible_date
     return db.parse_flexible_date(date_str)  # single implementation lives in database.py
 
 def format_to_dd_mm_yy(date_str: str) -> str:
@@ -127,7 +126,6 @@ class DocumentsView(ft.Column):
         self.render()
 
     def handle_copy(self, val: str, btn: ft.IconButton):
-        # v2 handle_copy
         copy_to_windows_clipboard(val)
         restore_icon = ft.Icons.COPY_ALL_ROUNDED if btn.icon_size == 18 else ft.Icons.COPY
         btn.icon = ft.Icons.CHECK

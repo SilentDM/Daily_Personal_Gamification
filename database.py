@@ -235,7 +235,6 @@ def move_activity(activity_id: int, direction: str):
 
 # --- Daily Logs Operations ---
 def save_log(activity_id: int, year: int, week: int, day_idx: int, status: str, score: int):
-    # v2 save_log
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -266,7 +265,6 @@ def get_current_week_logs(year: int, week: int):
 
 # --- Gamification Calculations (All 5 Discipline Sources) ---
 def get_user_xp_and_level():
-    # v2 get_user_xp_and_level
     """Total XP is the sum of the XP ledger (history is immutable), capped at 1000."""
     conn = get_connection()
     total = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM xp_ledger").fetchone()[0] or 0.0
@@ -283,7 +281,6 @@ def get_user_xp_and_level():
     return total_xp, level, xp_in_level, get_rank_title(level)
 
 def get_current_streak():
-    # v2 get_current_streak
     conn = get_connection()
     rows = conn.execute(
         "SELECT event_date, meta FROM xp_ledger WHERE source = 'habit_day' AND meta IS NOT NULL"
@@ -311,7 +308,6 @@ def get_current_streak():
     return streak
 
 def get_past_weeks_scores(num_weeks=6):
-    # v2 get_past_weeks_scores
     """Weekly score = average of the daily averages (same rule as the KPI card)."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -560,7 +556,6 @@ def add_task(title: str, status: str = "Planning"):
     return task_id
 
 def update_task_status(task_id: int, status: str, year: int, week: int):
-    # v2 update_task_status
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
@@ -629,7 +624,6 @@ def move_task(task_id: int, direction: str):
     conn.close()
 
 def save_task_notes_with_progress(task_id: int, new_notes: str) -> float:
-    # v2 save_task_notes_with_progress
     """Saves notes and awards XP if content grew by at least 10 characters (15 min cooldown)."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -708,7 +702,6 @@ def add_study_session(topic: str, source: str = "FIAP"):
     return session_id
 
 def update_study_session(session_id: int, topic: str, source: str, eli5: str, code_sandbox: str, break_test: str, recall_questions: str, status: str):
-    # v2 update_study_session
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -783,7 +776,6 @@ def delete_calendar_event(event_id: int):
     conn.close()
 
 def get_events_for_date(target_date: date):
-    # v2 get_events_for_date
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -819,7 +811,6 @@ def get_events_for_date(target_date: date):
     return matching_events
 
 def toggle_event_completion(event_id: int, date_str: str):
-    # v2 toggle_event_completion
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM event_completions WHERE event_id = ? AND completion_date = ?", (event_id, date_str))
@@ -898,7 +889,6 @@ def export_to_csv():
     return str(file_path)
 
 def get_documents(category_filter: str = "All"):
-    # v2 get_documents
     conn = get_connection()
     cursor = conn.cursor()
     query = """
@@ -923,7 +913,6 @@ def get_documents(category_filter: str = "All"):
     return out
 
 def add_document(category: str, doc_type: str, title: str, doc_number: str, secondary_info: str = "", issue_date: str = "", expiration_date: str = "", notes: str = "", extra_fields: str = "[]"):
-    # v2 add_document
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -937,7 +926,6 @@ def add_document(category: str, doc_type: str, title: str, doc_number: str, seco
     return doc_id
 
 def update_document(doc_id: int, category: str, doc_type: str, title: str, doc_number: str, issue_date: str, expiration_date: str, notes: str, extra_fields: str = "[]", secondary_info=None):
-    # v2 update_document
     """secondary_info=None keeps the stored value (the editor does not show that field)."""
     conn = get_connection()
     cursor = conn.cursor()

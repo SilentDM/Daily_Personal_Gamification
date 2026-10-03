@@ -15,12 +15,17 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Dual Habit Logic (Positive vs. Negative Habits):**
   * **Positive Habits:** `Excellent (+10)`, `Ok (+7)`, `A Little (+4)`, `Skipped (0)`.
   * **Bad Habits to Avoid (Inverted Scoring):** `Resisted (+10)`, `Slipped (+4)`, `Relapsed (0)`.
-* **Daily Scoring (0–10 Scale):** Dynamically calculates your daily performance average using passing thresholds (Green $\ge 8.0$, Orange $\ge 5.0$, Red $< 5.0$).
+* **Daily Scoring (0–10 Scale):** Dynamically calculates your daily performance average using passing thresholds (Green $\ge 7.0$, Orange $\ge 5.0$, Red $< 5.0$).
+* **Past Weeks:** Navigate back to earlier weeks and fix missed entries (XP updates accordingly).
 
 ### 🔥 2. Gamification System
 * **Streak Counter (🔥):** Tracks consecutive days maintaining a daily average score $\ge 7.0$.
-* **XP & Level Progression:** Earn 10 XP for every score point logged. Level up every 100 XP with an animated progress bar.
-* **Rank Titles:** Progress through ranks from **Novice** $\rightarrow$ **Consistent** $\rightarrow$ **Disciplined** $\rightarrow$ **Habit Master** $\rightarrow$ **Ascended**.
+* **XP Ledger:** Every XP gain is recorded once in an immutable ledger, so your level never shifts retroactively:
+  * **Habit day:** `(daily average − 5) × 2` (a bad day costs XP, a perfect day gives +10).
+  * **Quest completed:** +15 XP · **Study chapter mastered:** +15 XP · **Calendar event done:** +10 XP.
+  * **Quest notes progress:** +2 XP when notes grow by 10+ characters (15 min cooldown).
+* **Levels 1–100:** One level every 10 XP, max level at 1,000 XP.
+* **Rank Titles:** **Novice** $ightarrow$ **Apprentice** (16) $ightarrow$ **Disciplined** (36) $ightarrow$ **Elite** (61) $ightarrow$ **Master** (81) $ightarrow$ **Centurion** (100).
 
 ### 📊 3. Performance & Analytics Dashboard
 * **KPI Metrics:** Track Weekly Average, Task Completion Rate (%), Vice Resistance Rate (%), and your Best Performing Day.
@@ -29,10 +34,21 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Category Mastery:** Visual progress bars displaying your performance per category (`Health`, `Study`, etc.).
 * **Hero vs. Nemesis Habit:** Identifies your strongest habit vs. the activity needing the most focus.
 
-### ⚡ 4. Quality of Life & Storage
+### 🗺️ 4. Quests, Study, Calendar & Documents
+* **Quests:** Main quests with weighted subquests (Planning → Complete), progress bars and a notepad.
+* **Study:** "Proof of Work" chapter template (ELI5, toy sandbox, break-it test, active recall) with autosave.
+* **Calendar:** Month / day views, recurring events (weekly, monthly, yearly), tray reminders 15 min before and an alarm dialog at start time.
+* **Documents Vault:** Personal documents with masked numbers, auto-clearing clipboard copy, expiration alerts and **field-level encryption** (key stored in the Windows Credential Manager — back it up with `python secure.py show-key`).
+
+### 🖼️ 5. Desktop Wallpaper HUD
+* Renders your level, streak, today's score, quests, studies, upcoming events and document alerts onto your wallpaper (position, accent color and widgets are configurable).
+
+### ⚡ 6. Quality of Life & Storage
 * **⚡ Quick-Fill Today:** Automatically marks all unlogged tasks for today (`Ok` for positive habits, `Resisted` for bad habits) in one click.
-* **💾 One-Click CSV Export:** Generates a timestamped backup CSV on your Desktop.
-* **🔒 AppData Persistence:** Stores SQLite data safely in your operating system's `AppData` folder, ensuring updates never erase your data.
+* **💾 One-Click CSV Export:** Generates a timestamped CSV on your Desktop.
+* **🔒 AppData Persistence:** Stores SQLite data in `%APPDATA%\Daily_Personal_Gamification`, so updates never erase your data.
+* **🗄️ Daily Backups:** One backup per day (last 14 kept) in the `backups` folder; set `GAMIFICATION_BACKUP_DIR` to also copy it elsewhere (e.g. OneDrive).
+* **🔄 Auto-Update & Tray:** Fast-forwards from GitHub on launch, closes to the system tray, single instance only.
 
 ---
 
@@ -41,13 +57,22 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 ```text
 Daily_Personal_Gamification/
 │
-├── constants.py       # Scoring weights, categories, day names, rank titles
-├── database.py        # SQLite schema, queries, streak/XP logic, CSV exporter
-├── schedule_view.py   # Tracker grid, dynamic rows, gamification banner
-├── graphs_view.py     # Analytics dashboard, KPI cards, and charts
-├── main.py            # App entrypoint, window config, and navigation rail
-├── requirements.txt   # Dependencies (flet, flet-charts)
-└── README.md
+├── main.py             # App entrypoint, navigation rail, tray icon, reminder loop
+├── constants.py        # Scoring weights, XP values, thresholds, rank titles
+├── database.py         # SQLite schema & migrations, XP ledger, streaks, backups, CSV export
+├── secure.py           # Field-level encryption for the documents vault
+├── applog.py           # Rotating log file in AppData
+├── updater.py          # git fast-forward auto-update on launch
+├── schedule_view.py    # Weekly habit grid and gamification banner
+├── graphs_view.py      # Analytics dashboard, KPI cards and charts
+├── todo_view.py        # Quests and subquests
+├── study_view.py       # Study chapters
+├── calendar_view.py    # Calendar and events
+├── documents_view.py   # Personal documents vault
+├── wallpaper.py        # Wallpaper HUD renderer
+├── wallpaper_view.py   # HUD settings screen
+├── base_wallpaper.jpg  # Background image for the HUD
+└── requirements.txt
 ```
 
 ---
@@ -108,6 +133,8 @@ To launch the tracker directly from your desktop **without opening an ugly black
 * **Language:** Python 3.10+
 * **GUI Framework:** [Flet](https://flet.dev/) (Flutter for Python)
 * **Visualizations:** `flet-charts`
+* **Wallpaper / Tray:** `Pillow`, `pystray`
+* **Encryption:** `cryptography` (Fernet) + `keyring`
 * **Database:** SQLite3 (Local & Persistent in `%APPDATA%`)
 
 ---
