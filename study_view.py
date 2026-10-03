@@ -151,13 +151,13 @@ class StudyView(ft.Row):
             clean_status,
         )
 
-    def save_current(self):
-        """Autosaves the open chapter if anything changed. Returns True if saved."""
+    def save_current(self, force: bool = False):
+        """Autosaves the open chapter if anything changed (or always, with force). Returns True if saved."""
         sid = self.selected_session_id
         if sid is None or self._loaded_session_id != sid or self._snapshot is None:
             return False
         values = self._current_values()
-        if values == self._snapshot:
+        if values == self._snapshot and not force:
             return False
         topic, source, eli5, code, break_t, recall, status = values
         db.update_study_session(
@@ -250,21 +250,9 @@ class StudyView(ft.Row):
         self._snapshot = self._current_values()
 
         def save_clicked(e):
-            clean_status = "Mastered" if "Mastered" in self.status_dropdown.value else "In Progress"
-            db.update_study_session(
-                session_id=self.selected_session_id,
-                topic=self.topic_title_input.value.strip(),
-                source=self.source_dropdown.value,
-                eli5=self.eli5_input.value,
-                code_sandbox=self.code_input.value,
-                break_test=self.break_input.value,
-                recall_questions=self.recall_input.value,
-                status=clean_status
-            )
+            self.save_current(force=True)  # same sanitizing as autosave
             e.control.content = "Saved!"
-            self._snapshot = self._current_values()
             self.render_sidebar_tiles()
-            update_desktop_wallpaper()
             if self.app_page:
                 self.app_page.update()
 

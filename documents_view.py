@@ -250,7 +250,6 @@ class DocumentsView(ft.Column):
                 doc_type=self.type_dropdown.value,
                 title=title,
                 doc_number=doc_num,
-                secondary_info="",
                 issue_date=issue_clean,
                 expiration_date=exp_clean,
                 notes=self.notes_input.value.strip(),

@@ -162,11 +162,13 @@ def init_db():
         cursor.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0")
         cursor.execute("UPDATE tasks SET sort_order = id WHERE sort_order = 0 OR sort_order IS NULL")
     
-    _run_v2_migrations(conn)
+    # 4. Migrations for Documents table (must run before v2: it encrypts extra_fields)
     cursor.execute("PRAGMA table_info(personal_documents)")
     doc_cols = [info[1] for info in cursor.fetchall()]
     if "extra_fields" not in doc_cols:
         cursor.execute("ALTER TABLE personal_documents ADD COLUMN extra_fields TEXT DEFAULT '[]'")
+
+    _run_v2_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -934,17 +936,21 @@ def add_document(category: str, doc_type: str, title: str, doc_number: str, seco
     conn.close()
     return doc_id
 
-def update_document(doc_id: int, category: str, doc_type: str, title: str, doc_number: str, secondary_info: str, issue_date: str, expiration_date: str, notes: str, extra_fields: str = "[]"):
+def update_document(doc_id: int, category: str, doc_type: str, title: str, doc_number: str, issue_date: str, expiration_date: str, notes: str, extra_fields: str = "[]", secondary_info=None):
     # v2 update_document
+    """secondary_info=None keeps the stored value (the editor does not show that field)."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE personal_documents
-        SET category = ?, doc_type = ?, title = ?, doc_number = ?, secondary_info = ?,
+        SET category = ?, doc_type = ?, title = ?, doc_number = ?,
             issue_date = ?, expiration_date = ?, notes = ?, extra_fields = ?
         WHERE id = ?
-    """, (category, doc_type, title, secure.encrypt(doc_number), secure.encrypt(secondary_info),
+    """, (category, doc_type, title, secure.encrypt(doc_number),
           issue_date, expiration_date, secure.encrypt(notes), secure.encrypt(extra_fields), doc_id))
+    if secondary_info is not None:
+        cursor.execute("UPDATE personal_documents SET secondary_info = ? WHERE id = ?",
+                       (secure.encrypt(secondary_info), doc_id))
     conn.commit()
     conn.close()
 

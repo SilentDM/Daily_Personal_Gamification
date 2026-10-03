@@ -107,7 +107,7 @@ class ScheduleView(ft.Column):
             current_status = logs.get((act_id, self.today_idx), ("-", None))[0]
             if current_status in ("-", None):
                 default_status = "Resisted" if is_neg else "Ok"
-                score = 10 if is_neg else 7
+                score = (NEGATIVE_SCORES if is_neg else POSITIVE_SCORES)[default_status]
                 db.save_log(act_id, self.year, self.week, self.today_idx, default_status, score)
 
         self.render()
