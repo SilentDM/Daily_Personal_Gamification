@@ -7,7 +7,7 @@ import sys
 import shutil
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -127,6 +127,97 @@ class CalendarTests(DbTestCase):
         self.assertEqual(len(db.get_upcoming_events()), 1)
         db.toggle_event_completion(eid, tomorrow.isoformat())
         self.assertEqual(db.get_upcoming_events(), [])
+
+    def test_upcoming_uses_minutes_and_keeps_todays_all_day_events(self):
+        db.add_calendar_event("Standup", "2025-05-05", 9, start_minute=30)
+        db.add_calendar_event("Holiday", "2025-05-05", all_day=True)
+        titles = [o["title"] for o in db.get_upcoming_events(now=datetime(2025, 5, 5, 9, 20))]
+        self.assertEqual(titles, ["Holiday", "Standup"])
+        titles = [o["title"] for o in db.get_upcoming_events(now=datetime(2025, 5, 5, 9, 31))]
+        self.assertEqual(titles, ["Holiday"])
+
+    def test_day_is_sorted_all_day_first_then_by_time(self):
+        db.add_calendar_event("Late", "2025-05-05", 18)
+        db.add_calendar_event("Early", "2025-05-05", 8, start_minute=45)
+        db.add_calendar_event("Trip", "2025-05-05", all_day=True)
+        db.add_calendar_event("Earlier", "2025-05-05", 8, start_minute=15)
+        self.assertEqual([o["title"] for o in db.get_events_for_date(date(2025, 5, 5))],
+                         ["Trip", "Earlier", "Early", "Late"])
+
+    def test_daily_and_weekdays_with_series_end(self):
+        db.add_calendar_event("Meds", "2025-06-01", 8, "daily", recurrence_end="2025-06-10")
+        db.add_calendar_event("Work", "2025-06-02", 9, "weekdays")  # Monday
+        june = db.get_events_between(date(2025, 6, 1), date(2025, 6, 30))
+        meds = [d.day for d, occ in june.items() if any(o["title"] == "Meds" for o in occ)]
+        work = [d.day for d, occ in june.items() if any(o["title"] == "Work" for o in occ)]
+        self.assertEqual(meds, list(range(1, 11)))
+        self.assertEqual(len(work), 21)
+        self.assertNotIn(7, work)  # Saturday
+
+    def test_skip_single_occurrence(self):
+        eid = db.add_calendar_event("Gym", "2025-06-02", 7, "weekly")
+        db.skip_event_occurrence(eid, "2025-06-09")
+        self.assertEqual(db.get_events_for_date(date(2025, 6, 9)), [])
+        self.assertEqual(len(db.get_events_for_date(date(2025, 6, 16))), 1)
+
+    def test_end_series_keeps_earlier_occurrences(self):
+        eid = db.add_calendar_event("Class", "2025-06-02", 19, "weekly")
+        db.end_event_series(eid, "2025-06-16")
+        self.assertEqual(len(db.get_events_for_date(date(2025, 6, 9))), 1)
+        self.assertEqual(db.get_events_for_date(date(2025, 6, 16)), [])
+        db.end_event_series(eid, "2025-06-02")  # from the first one -> whole series
+        self.assertEqual(db.get_events_for_date(date(2025, 6, 9)), [])
+
+    def test_edit_one_occurrence_moves_its_completion(self):
+        eid = db.add_calendar_event("Gym", "2025-06-02", 7, "weekly")
+        db.toggle_event_completion(eid, "2025-06-09")
+        xp_before = self.xp()
+        new_id = db.edit_event_occurrence(eid, "2025-06-09", start_hour=18, title="Gym (evening)")
+        occ = db.get_events_for_date(date(2025, 6, 9))
+        self.assertEqual([(o["id"], o["title"], o["start_hour"], o["recurrence"]) for o in occ],
+                         [(new_id, "Gym (evening)", 18, "none")])
+        self.assertTrue(db.is_event_completed(new_id, "2025-06-09"))
+        self.assertAlmostEqual(self.xp(), xp_before)
+        self.assertEqual(db.get_events_for_date(date(2025, 6, 16))[0]["start_hour"], 7)
+
+    def test_edit_following_splits_the_series(self):
+        eid = db.add_calendar_event("Class", "2025-06-02", 19, "weekly", recurrence_end="2025-12-31")
+        new_id = db.edit_event_following(eid, "2025-06-16", start_hour=20)
+        self.assertEqual(db.get_events_for_date(date(2025, 6, 9))[0]["start_hour"], 19)
+        later = db.get_events_for_date(date(2025, 6, 23))[0]
+        self.assertEqual((later["id"], later["start_hour"], later["recurrence_end"]), (new_id, 20, "2025-12-31"))
+        self.assertEqual(sum(len(v) for v in db.get_events_between(date(2025, 6, 1), date(2025, 6, 30)).values()), 5)
+
+    def test_update_rejects_unknown_fields(self):
+        eid = db.add_calendar_event("X", "2025-06-02")
+        with self.assertRaises(ValueError):
+            db.update_calendar_event(eid, active=0)
+
+    def test_reminder_times(self):
+        timed = {"date": "2025-06-02", "all_day": False, "start_hour": 10, "start_minute": 30, "reminder_min": 15}
+        self.assertEqual(db.reminder_time(timed), datetime(2025, 6, 2, 10, 15))
+        self.assertIsNone(db.reminder_time(dict(timed, reminder_min=db.NO_REMINDER)))
+        all_day = dict(timed, all_day=True, reminder_min=0)
+        self.assertEqual(db.reminder_time(all_day), datetime(2025, 6, 2, 9, 0))
+        self.assertEqual(db.reminder_time(dict(all_day, reminder_min=1440)), datetime(2025, 6, 1, 9, 0))
+
+    def test_old_calendar_schema_is_migrated(self):
+        old = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, old, True)
+        with mock.patch.dict(os.environ, {"APPDATA": old}):
+            conn = db.get_connection()
+            conn.execute("""CREATE TABLE calendar_events (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL, event_date TEXT NOT NULL, start_hour INTEGER NOT NULL,
+                recurrence TEXT DEFAULT 'none', active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("INSERT INTO calendar_events (title, event_date, start_hour) VALUES ('Old', '2025-01-01', 14)")
+            conn.commit()
+            conn.close()
+            db.init_db()
+            occ = db.get_events_for_date(date(2025, 1, 1))[0]
+            self.assertEqual((occ["title"], occ["start_hour"], occ["start_minute"], occ["duration_min"],
+                              occ["all_day"], occ["reminder_min"], occ["color"]),
+                             ("Old", 14, 0, 60, False, 15, "Cyan"))
 
 
 class DocumentTests(DbTestCase):

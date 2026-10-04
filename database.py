@@ -2,7 +2,7 @@ import sqlite3, os, csv, json, shutil, logging
 import calendar as _calendar
 import secure
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from constants import get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, XP_NOTE_PROGRESS, SCORE_PASSING
 
 def get_db_path():
@@ -169,6 +169,7 @@ def init_db():
         cursor.execute("ALTER TABLE personal_documents ADD COLUMN extra_fields TEXT DEFAULT '[]'")
 
     _run_v2_migrations(conn)
+    _run_calendar_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -771,30 +772,168 @@ def set_hud_setting(key: str, value: str):
     conn.close()
 
 # --- Calendar Events & Reminders Operations ---
-def add_calendar_event(title: str, event_date_str: str, start_hour: int, recurrence: str = "none"):
+RECURRENCES = ("none", "daily", "weekdays", "weekly", "monthly", "yearly")
+EVENT_FIELDS = ("id", "title", "event_date", "start_hour", "start_minute", "duration_min", "all_day",
+                "recurrence", "recurrence_end", "color", "notes", "reminder_min")
+_EDITABLE_EVENT_FIELDS = set(EVENT_FIELDS) - {"id"}
+NO_REMINDER = -1
+ALL_DAY_REMINDER_HOUR = 9  # all-day events remind at 09:00 (the day before for reminders >= 1 day)
+
+
+def _event_from_row(row) -> dict:
+    ev = dict(zip(EVENT_FIELDS, row))
+    ev["all_day"] = bool(ev["all_day"])
+    ev["start_minute"] = ev["start_minute"] or 0
+    ev["duration_min"] = 60 if ev["duration_min"] is None else ev["duration_min"]
+    ev["reminder_min"] = 15 if ev["reminder_min"] is None else ev["reminder_min"]
+    ev["notes"] = ev["notes"] or ""
+    ev["recurrence_end"] = ev["recurrence_end"] or ""
+    ev["color"] = ev["color"] or "Cyan"
+    return ev
+
+
+def add_calendar_event(title: str, event_date_str: str, start_hour: int = 9, recurrence: str = "none",
+                       start_minute: int = 0, duration_min: int = 60, all_day: bool = False,
+                       color: str = "Cyan", notes: str = "", reminder_min: int = 15,
+                       recurrence_end: str = ""):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO calendar_events (title, event_date, start_hour, recurrence)
-        VALUES (?, ?, ?, ?)
-    """, (title, event_date_str, start_hour, recurrence))
+        INSERT INTO calendar_events (title, event_date, start_hour, recurrence, start_minute, duration_min,
+                                     all_day, color, notes, reminder_min, recurrence_end)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (title, event_date_str, start_hour, recurrence, start_minute, duration_min,
+          1 if all_day else 0, color, notes, reminder_min, recurrence_end))
     event_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return event_id
 
+
+def get_event(event_id: int):
+    conn = get_connection()
+    row = conn.execute(f"SELECT {', '.join(EVENT_FIELDS)} FROM calendar_events WHERE id = ?",
+                       (event_id,)).fetchone()
+    conn.close()
+    return _event_from_row(row) if row else None
+
+
+def update_calendar_event(event_id: int, **fields):
+    """Updates the whole series. Accepts any of EVENT_FIELDS except id."""
+    unknown = set(fields) - _EDITABLE_EVENT_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown event fields: {sorted(unknown)}")
+    if not fields:
+        return
+    if "all_day" in fields:
+        fields["all_day"] = 1 if fields["all_day"] else 0
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE calendar_events SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+        (*fields.values(), event_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def delete_calendar_event(event_id: int):
+    """Deletes the whole series."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE calendar_events SET active = 0 WHERE id = ?", (event_id,))
     conn.commit()
     conn.close()
 
-def _event_occurs_on(start_d: date, rec: str, target_date: date) -> bool:
+
+def skip_event_occurrence(event_id: int, date_str: str):
+    """Deletes a single occurrence of a repeating event."""
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO event_exceptions (event_id, exception_date) VALUES (?, ?)",
+                 (event_id, date_str))
+    conn.commit()
+    conn.close()
+
+
+def end_event_series(event_id: int, date_str: str):
+    """Deletes this occurrence and all following ones (the earlier ones are kept)."""
+    ev = get_event(event_id)
+    if not ev:
+        return
+    if date_str <= ev["event_date"]:
+        delete_calendar_event(event_id)
+    else:
+        day_before = date.fromisoformat(date_str) - timedelta(days=1)
+        update_calendar_event(event_id, recurrence_end=day_before.isoformat())
+
+
+def _move_completion(cursor, old_id: int, new_id: int, date_str: str):
+    """Keeps a completed occurrence (and its XP) attached to the event that replaces it."""
+    cursor.execute("UPDATE event_completions SET event_id = ? WHERE event_id = ? AND completion_date = ?",
+                   (new_id, old_id, date_str))
+    cursor.execute("UPDATE xp_ledger SET ref_key = ? WHERE source = 'event' AND ref_key = ?",
+                   (f"{new_id}:{date_str}", f"{old_id}:{date_str}"))
+
+
+def _clone_event(ev: dict, **overrides) -> int:
+    new = {k: v for k, v in ev.items() if k not in ("id", "date")}
+    new.update(overrides)
+    return add_calendar_event(new.pop("title"), new.pop("event_date"), **new)
+
+
+def edit_event_occurrence(event_id: int, date_str: str, **fields) -> int:
+    """Changes only one occurrence: it is skipped in the series and replaced by a one-time event."""
+    ev = get_event(event_id)
+    if not ev:
+        return None
+    fields = {"event_date": date_str, **fields, "recurrence": "none", "recurrence_end": ""}
+    skip_event_occurrence(event_id, date_str)
+    new_id = _clone_event(ev, **fields)
+    conn = get_connection()
+    _move_completion(conn.cursor(), event_id, new_id, date_str)
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def edit_event_following(event_id: int, date_str: str, **fields) -> int:
+    """Changes this occurrence and all following ones by splitting the series at date_str."""
+    ev = get_event(event_id)
+    if not ev:
+        return None
+    if date_str <= ev["event_date"]:
+        update_calendar_event(event_id, **fields)
+        return event_id
+    fields = {"event_date": date_str, **fields}
+    end_event_series(event_id, date_str)
+    new_id = _clone_event(ev, **fields)
+    conn = get_connection()
+    cursor = conn.cursor()
+    later = cursor.execute(
+        "SELECT completion_date FROM event_completions WHERE event_id = ? AND completion_date >= ?",
+        (event_id, date_str)).fetchall()
+    for (d,) in later:
+        _move_completion(cursor, event_id, new_id, d)
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def _event_occurs_on(ev: dict, target_date: date) -> bool:
+    try:
+        start_d = date.fromisoformat(ev["event_date"])
+    except ValueError:
+        return False
     if target_date < start_d:
         return False
+    if ev["recurrence_end"] and target_date.isoformat() > ev["recurrence_end"]:
+        return False
+    rec = ev["recurrence"]
     if rec == "none":
         return start_d == target_date
+    if rec == "daily":
+        return True
+    if rec == "weekdays":
+        return target_date.weekday() < 5
     if rec == "weekly":
         return start_d.weekday() == target_date.weekday()
     # an event on the 31st falls on the last day of shorter months
@@ -805,32 +944,68 @@ def _event_occurs_on(start_d: date, rec: str, target_date: date) -> bool:
         return target_date.month == start_d.month and target_date.day == min(start_d.day, last_day)
     return False
 
+
+def _occurrence_sort_key(ev: dict):
+    return (not ev["all_day"], ev["start_hour"], ev["start_minute"], ev["title"].lower())
+
+
 def get_events_between(start_date: date, end_date: date):
-    """{date: [(id, title, event_date, start_hour, recurrence), ...]} for every day in the range."""
+    """{date: [occurrence, ...]} for every day in the range (all-day first, then by start time).
+
+    Each occurrence is an event dict (see EVENT_FIELDS) plus "date" (YYYY-MM-DD of that occurrence).
+    """
+    start_str, end_str = start_date.isoformat(), end_date.isoformat()
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT id, title, event_date, start_hour, recurrence
-        FROM calendar_events
+    rows = conn.execute(f"""
+        SELECT {', '.join(EVENT_FIELDS)} FROM calendar_events
         WHERE active = 1 AND event_date <= ?
-        ORDER BY start_hour ASC
-    """, (end_date.isoformat(),)).fetchall()
+          AND (COALESCE(recurrence_end, '') = '' OR recurrence_end >= ?)
+    """, (end_str, start_str)).fetchall()
+    skipped = set(conn.execute(
+        "SELECT event_id, exception_date FROM event_exceptions WHERE exception_date BETWEEN ? AND ?",
+        (start_str, end_str)).fetchall())
     conn.close()
 
-    parsed = []
-    for r in rows:
-        try:
-            parsed.append((datetime.strptime(r[2], "%Y-%m-%d").date(), r))
-        except ValueError:
-            continue
-
+    events = [_event_from_row(r) for r in rows]
     result = {}
     for ordinal in range(start_date.toordinal(), end_date.toordinal() + 1):
         day = date.fromordinal(ordinal)
-        result[day] = [r for start_d, r in parsed if _event_occurs_on(start_d, r[4], day)]
+        day_str = day.isoformat()
+        result[day] = sorted(
+            (dict(ev, date=day_str) for ev in events
+             if (ev["id"], day_str) not in skipped and _event_occurs_on(ev, day)),
+            key=_occurrence_sort_key,
+        )
     return result
+
 
 def get_events_for_date(target_date: date):
     return get_events_between(target_date, target_date)[target_date]
+
+
+def occurrence_start(occ: dict) -> datetime:
+    d = date.fromisoformat(occ["date"])
+    if occ["all_day"]:
+        return datetime(d.year, d.month, d.day)
+    return datetime(d.year, d.month, d.day, occ["start_hour"], occ["start_minute"])
+
+
+def occurrence_end(occ: dict) -> datetime:
+    if occ["all_day"]:
+        return occurrence_start(occ) + timedelta(days=1)
+    return occurrence_start(occ) + timedelta(minutes=max(occ["duration_min"], 0))
+
+
+def reminder_time(occ: dict):
+    """When the reminder for this occurrence should fire, or None."""
+    minutes = occ["reminder_min"]
+    if minutes < 0:
+        return None
+    if occ["all_day"]:
+        base = occurrence_start(occ) + timedelta(hours=ALL_DAY_REMINDER_HOUR)
+        return base - timedelta(days=minutes // 1440)
+    return occurrence_start(occ) - timedelta(minutes=minutes)
+
 
 def get_completed_events(start_str: str, end_str: str):
     """Set of (event_id, 'YYYY-MM-DD') completed within the date range."""
@@ -841,6 +1016,7 @@ def get_completed_events(start_str: str, end_str: str):
     ).fetchall()
     conn.close()
     return set(rows)
+
 
 def toggle_event_completion(event_id: int, date_str: str):
     conn = get_connection()
@@ -862,6 +1038,7 @@ def toggle_event_completion(event_id: int, date_str: str):
     conn.close()
     return is_done
 
+
 def is_event_completed(event_id: int, date_str: str):
     conn = get_connection()
     cursor = conn.cursor()
@@ -870,28 +1047,25 @@ def is_event_completed(event_id: int, date_str: str):
     conn.close()
     return row is not None
 
-def get_upcoming_events(limit=3):
-    now = datetime.now()
+
+def get_upcoming_events(limit=3, days=14, now=None):
+    """Next not-completed occurrences that have not started yet (today's all-day events included)."""
+    now = now or datetime.now()
     today = now.date()
-    current_hour = now.hour
-    upcoming = []
-    last = date.fromordinal(today.toordinal() + 13)
+    last = today + timedelta(days=days - 1)
     events_by_day = get_events_between(today, last)
     completed = get_completed_events(today.isoformat(), last.isoformat())
 
-    for check_date, day_events in sorted(events_by_day.items()):
-        date_str = check_date.strftime("%Y-%m-%d")
-
-        for ev in day_events:
-            eid, title, _, start_hour, rec = ev
-            if check_date == today and start_hour < current_hour:
+    upcoming = []
+    for day in sorted(events_by_day):
+        for occ in events_by_day[day]:
+            if (occ["id"], occ["date"]) in completed:
                 continue
-            if (eid, date_str) in completed:
+            if not occ["all_day"] and occurrence_start(occ) < now:
                 continue
-            upcoming.append((check_date, title, start_hour, rec))
+            upcoming.append(occ)
             if len(upcoming) >= limit:
                 return upcoming
-
     return upcoming
 
 def export_to_csv():
@@ -1221,6 +1395,30 @@ def _run_v2_migrations(conn):
                         "extra_fields = ? WHERE id = ?", (*new, doc_id))
         except RuntimeError:
             logging.getLogger("gamification").exception("Document encryption migration skipped")
+
+
+def _run_calendar_migrations(conn):
+    """Calendar overhaul: minutes, duration, all-day, colors, notes, reminders, series end, exceptions."""
+    cols = {info[1] for info in conn.execute("PRAGMA table_info(calendar_events)")}
+    for name, ddl in (
+        ("start_minute", "INTEGER DEFAULT 0"),
+        ("duration_min", "INTEGER DEFAULT 60"),
+        ("all_day", "INTEGER DEFAULT 0"),
+        ("color", "TEXT DEFAULT 'Cyan'"),
+        ("notes", "TEXT DEFAULT ''"),
+        ("reminder_min", "INTEGER DEFAULT 15"),
+        ("recurrence_end", "TEXT DEFAULT ''"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE calendar_events ADD COLUMN {name} {ddl}")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS event_exceptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            exception_date TEXT NOT NULL,
+            UNIQUE(event_id, exception_date)
+        )
+    """)
 
 
 def _desktop_dir() -> Path:

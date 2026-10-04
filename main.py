@@ -31,7 +31,7 @@ import subprocess
 import ctypes
 import pystray
 import winsound
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from PIL import Image, ImageDraw
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update
 from applog import setup_logging
@@ -289,6 +289,7 @@ def main(page: ft.Page):
                     last_checked_hour = now.hour
                     schedule_view.render()
                     schedule_view.calculate_daily_scores()
+                    calendar_view.render()
                     update_desktop_wallpaper()
                     page.update()
 
@@ -297,39 +298,46 @@ def main(page: ft.Page):
                     last_checked_hour = now.hour
                     update_desktop_wallpaper()
 
-                # 3. Calendar Event Reminders (robust to sleep/resume, skips completed events)
-                for ev in db.get_events_for_date(today):
-                    eid, title, _, hour, _ = ev
-                    if db.is_event_completed(eid, today_str):
-                        continue
-                    event_dt = datetime(today.year, today.month, today.day, hour, 0, 0)
-                    delta_min = (event_dt - now).total_seconds() / 60.0
+                # 3. Calendar reminders (each event has its own lead time) and start alarms
+                tomorrow = today + timedelta(days=1)
+                done = db.get_completed_events(today_str, tomorrow.isoformat())
+                for day_events in db.get_events_between(today, tomorrow).values():
+                    for occ in day_events:
+                        key = (occ["id"], occ["date"])
+                        if key in done:
+                            continue
+                        title = occ["title"]
+                        start = db.occurrence_start(occ)
 
-                    if 0.0 < delta_min <= 15.0:
-                        key = (eid, today_str, "15m")
-                        if key not in NOTIFIED_ALARMS:
-                            NOTIFIED_ALARMS.add(key)
-                            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-                            try:  # unobtrusive: tray notification, no focus stealing
-                                tray_icon_instance.notify(
-                                    f"'{title}' starts at {hour:02d}:00 (in {int(delta_min) + 1} min)",
-                                    "Upcoming appointment"
+                        # a) tray notification at the reminder time (no focus stealing)
+                        remind_at = db.reminder_time(occ)
+                        if remind_at is not None:
+                            window_end = remind_at + timedelta(hours=2) if occ["all_day"] else start
+                            if remind_at <= now < window_end and key + ("remind",) not in NOTIFIED_ALARMS:
+                                NOTIFIED_ALARMS.add(key + ("remind",))
+                                if occ["all_day"]:
+                                    when = "today (all day)" if start.date() == today else "tomorrow (all day)"
+                                else:
+                                    mins = int((start - now).total_seconds() // 60) + 1
+                                    when = f"at {start:%H:%M} (in {mins} min)" if mins <= 90 else f"at {start:%H:%M}"
+                                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                                try:
+                                    tray_icon_instance.notify(f"'{title}' {when}", "Upcoming appointment")
+                                except Exception:
+                                    log.exception("tray notification failed")
+
+                        # b) alarm dialog when a timed event starts (up to 30 min late, e.g. after sleep)
+                        if not occ["all_day"] and start <= now <= start + timedelta(minutes=30):
+                            if key + ("start",) not in NOTIFIED_ALARMS:
+                                NOTIFIED_ALARMS.add(key + ("start",))
+                                NOTIFIED_ALARMS.add(key + ("remind",))
+                                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                                restore_window_from_tray(page)
+                                show_alarm_dialog(
+                                    "🚨 Event Starting NOW!",
+                                    f"'{title}' starts now ({start:%H:%M})!",
+                                    occ["id"], occ["date"]
                                 )
-                            except Exception:
-                                log.exception("tray notification failed")
-
-                    elif -30.0 <= delta_min <= 0.0:
-                        key = (eid, today_str, "0m")
-                        if key not in NOTIFIED_ALARMS:
-                            NOTIFIED_ALARMS.add(key)
-                            NOTIFIED_ALARMS.add((eid, today_str, "15m"))
-                            winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                            restore_window_from_tray(page)
-                            show_alarm_dialog(
-                                "🚨 Event Starting NOW!",
-                                f"'{title}' starts now ({hour:02d}:00)!",
-                                eid, today_str
-                            )
             except Exception:
                 log.exception("reminder loop failed")
 

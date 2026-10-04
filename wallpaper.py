@@ -230,9 +230,12 @@ def render_wallpaper():
             draw.text((x1 + 25, curr_y + 12), "UPCOMING CALENDAR:", fill=(255, 200, 100, 255), font=font_sub)
             curr_y += 32
 
-            for ev_date, ev_title, ev_hour, ev_rec in upcoming_events:
+            for occ in upcoming_events:
+                ev_title = occ["title"]
                 clean_title = (ev_title[:32] + "...") if len(ev_title) > 32 else ev_title
-                ev_line = f"• [{ev_date.strftime('%d-%m-%y')} {ev_hour:02d}:00] {clean_title}"
+                ev_date = db.occurrence_start(occ)
+                ev_time = "All day" if occ["all_day"] else f"{ev_date:%H:%M}"
+                ev_line = f"• [{ev_date:%d-%m-%y} {ev_time}] {clean_title}"
                 draw.text((x1 + 25, curr_y), ev_line, fill=(240, 240, 240, 255), font=font_body)
                 curr_y += 22
         # Document Expiration Warnings

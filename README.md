@@ -37,7 +37,10 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 ### 🗺️ 4. Quests, Study, Calendar & Documents
 * **Quests:** Main quests with weighted subquests (Planning → Complete), progress bars and a notepad.
 * **Study:** "Proof of Work" chapter template (ELI5, toy sandbox, break-it test, active recall) with autosave.
-* **Calendar:** Month / day views, recurring events (weekly, monthly, yearly), tray reminders 15 min before and an alarm dialog at start time.
+* **Calendar:** Month, Week, Day (time grid with current-time line, overlapping events side by side, mini-month) and searchable Agenda views.
+  * Events with start time, duration or all-day, color, notes and a per-event reminder (tray notification), plus an alarm dialog at start time.
+  * Repeats: daily, weekdays, weekly, monthly, yearly, with an optional end date. Edit or delete just one occurrence, this and following, or the whole series.
+  * Overlap warnings while scheduling; mark events done for +10 XP.
 * **Documents Vault:** Personal documents with masked numbers, auto-clearing clipboard copy, expiration alerts and **field-level encryption** (key stored in the Windows Credential Manager — back it up with `python secure.py show-key`).
 
 ### 🖼️ 5. Desktop Wallpaper HUD
