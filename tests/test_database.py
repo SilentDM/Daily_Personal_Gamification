@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import database as db  # noqa: E402
 import secure  # noqa: E402
-from constants import XP_QUEST  # noqa: E402
+from constants import XP_QUEST, XP_STUDY, XP_STUDY_LOG, XP_REVIEW, REVIEW_DAYS  # noqa: E402
 
 
 class DbTestCase(unittest.TestCase):
@@ -235,6 +235,122 @@ class DocumentTests(DbTestCase):
         conn.close()
         self.assertTrue(raw.startswith(secure.PREFIX))
         self.assertEqual(db.get_documents()[0][4], "111.222.333-44")
+
+
+class StudyTests(DbTestCase):
+    D0 = date(2025, 3, 10)
+
+    def chapter(self, sid):
+        return db.get_study_session(sid)
+
+    def test_new_chapter_starts_not_started_and_first_entry_moves_to_studying(self):
+        sid = db.add_study_session("Docker")
+        self.assertEqual(self.chapter(sid)["status"], "Not started")
+        db.add_journal_entry(sid, "Installed docker, ran hello-world container", minutes=30,
+                             next_step="Volumes chapter")
+        ch = self.chapter(sid)
+        self.assertEqual((ch["status"], ch["sessions"], ch["minutes"], ch["next_step"]),
+                         ("Studying", 1, 30, "Volumes chapter"))
+
+    def test_journal_xp_once_per_chapter_per_day_and_only_for_real_notes(self):
+        sid = db.add_study_session("SQL")
+        self.assertEqual(db.add_journal_entry(sid, "short", entry_date="2025-03-10"), 0.0)
+        self.assertEqual(db.add_journal_entry(sid, "Joins: inner, left, right and full outer", entry_date="2025-03-10"),
+                         XP_STUDY_LOG)
+        self.assertEqual(db.add_journal_entry(sid, "Window functions: ROW_NUMBER, RANK", entry_date="2025-03-10"), 0.0)
+        self.assertEqual(db.add_journal_entry(sid, "Indexes and query plans, EXPLAIN", entry_date="2025-03-11"),
+                         XP_STUDY_LOG)
+        self.assertAlmostEqual(self.xp(), 2 * XP_STUDY_LOG)
+
+    def test_deleting_the_only_qualifying_entry_removes_its_xp(self):
+        sid = db.add_study_session("SQL")
+        db.add_journal_entry(sid, "Joins: inner, left, right and full outer", entry_date="2025-03-10")
+        entry = db.get_journal(sid)[0]
+        db.delete_journal_entry(entry["id"])
+        self.assertAlmostEqual(self.xp(), 0.0)
+
+    def test_mastering_awards_xp_and_schedules_first_review(self):
+        sid = db.add_study_session("Git")
+        db.set_study_status(sid, "Mastered", on=self.D0)
+        self.assertAlmostEqual(self.xp(), XP_STUDY)
+        reviews = db.get_study_reviews(sid)
+        self.assertEqual([(r["review_no"], r["due_date"]) for r in reviews], [(1, "2025-03-11")])
+
+    def test_review_series_follows_review_days_when_on_time(self):
+        sid = db.add_study_session("Git")
+        db.set_study_status(sid, "Mastered", on=self.D0)
+        for _ in REVIEW_DAYS:
+            pending = [r for r in db.get_study_reviews(sid) if not r["done_date"]][0]
+            db.complete_review(pending["id"], on=date.fromisoformat(pending["due_date"]))
+        reviews = db.get_study_reviews(sid)
+        due_offsets = [(date.fromisoformat(r["due_date"]) - self.D0).days for r in reviews]
+        self.assertEqual(tuple(due_offsets), REVIEW_DAYS)
+        self.assertTrue(all(r["done_date"] for r in reviews))
+        self.assertAlmostEqual(self.xp(), XP_STUDY + XP_REVIEW * len(REVIEW_DAYS))
+
+    def test_struggled_review_repeats_tomorrow(self):
+        sid = db.add_study_session("Regex")
+        db.set_study_status(sid, "Mastered", on=self.D0)
+        first = db.get_study_reviews(sid)[0]
+        db.complete_review(first["id"], remembered=False, on=date(2025, 3, 11))
+        pending = [r for r in db.get_study_reviews(sid) if not r["done_date"]]
+        self.assertEqual([(r["review_no"], r["due_date"]) for r in pending], [(1, "2025-03-12")])
+
+    def test_projects_can_skip_reviews(self):
+        sid = db.add_study_session("Portfolio project")
+        db.set_study_needs_review(sid, False)
+        db.set_study_status(sid, "Mastered", on=self.D0)
+        self.assertEqual(db.get_study_reviews(sid), [])
+        db.set_study_needs_review(sid, True, on=self.D0)  # turning it back on starts the series
+        self.assertEqual(len(db.get_study_reviews(sid)), 1)
+        db.set_study_needs_review(sid, False)
+        self.assertEqual(db.get_study_reviews(sid), [])
+
+    def test_reopening_a_chapter_removes_xp_and_pending_reviews(self):
+        sid = db.add_study_session("Git")
+        db.set_study_status(sid, "Mastered", on=self.D0)
+        db.set_study_status(sid, "Reviewing")
+        self.assertAlmostEqual(self.xp(), 0.0)
+        self.assertEqual(db.get_study_reviews(sid), [])
+        self.assertEqual(self.chapter(sid)["mastered_at"], "")
+
+    def test_due_reviews_listing_and_chapter_order(self):
+        a = db.add_study_session("Old mastered")
+        b = db.add_study_session("Active one")
+        db.set_study_status(a, "Mastered", on=date.today() - timedelta(days=5))
+        db.add_journal_entry(b, "Working through exercises 1 to 10")
+        due = db.get_pending_reviews(until=date.today())
+        self.assertEqual([(r["topic"], r["review_no"]) for r in due], [("Old mastered", 1)])
+        # a chapter with a review due is listed first
+        self.assertEqual([c["topic"] for c in db.get_study_sessions()], ["Old mastered", "Active one"])
+        self.assertEqual(db.get_study_sessions()[0]["reviews_due"], 1)
+
+    def test_old_study_rows_are_migrated(self):
+        old = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, old, True)
+        with mock.patch.dict(os.environ, {"APPDATA": old}):
+            conn = db.get_connection()
+            conn.execute("""CREATE TABLE study_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL,
+                source TEXT DEFAULT 'FIAP / Alura', eli5 TEXT DEFAULT '', code_sandbox TEXT DEFAULT '',
+                break_test TEXT DEFAULT '', recall_questions TEXT DEFAULT '', status TEXT DEFAULT 'In Progress',
+                active INTEGER DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("INSERT INTO study_sessions (topic) VALUES ('Old in progress')")
+            conn.execute("INSERT INTO study_sessions (topic, status, updated_at) "
+                         "VALUES ('Old mastered', 'Mastered', '2025-01-02 10:00:00')")
+            conn.commit()
+            conn.close()
+            db.init_db()
+            by_topic = {c["topic"]: c for c in db.get_study_sessions()}
+            self.assertEqual(by_topic["Old in progress"]["status"], "Studying")
+            self.assertEqual(by_topic["Old mastered"]["mastered_at"], "2025-01-02")
+            self.assertTrue(by_topic["Old mastered"]["needs_review"])
+            self.assertEqual(db.get_pending_reviews(), [])  # no surprise backlog of old reviews
+
+    def test_update_rejects_status_and_unknown_fields(self):
+        sid = db.add_study_session("X")
+        with self.assertRaises(ValueError):
+            db.update_study_session(sid, status="Mastered")
 
 
 if __name__ == "__main__":

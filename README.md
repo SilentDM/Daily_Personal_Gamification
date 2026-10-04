@@ -24,6 +24,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
   * **Habit day:** `(daily average − 5) × 2` (a bad day costs XP, a perfect day gives +10).
   * **Quest completed:** +15 XP · **Study chapter mastered:** +15 XP · **Calendar event done:** +10 XP.
   * **Quest notes progress:** +2 XP when notes grow by 10+ characters (15 min cooldown).
+  * **Study journal:** +2 XP for the first real entry (20+ characters) of the day per chapter · **Study review:** +5 XP each.
 * **Levels 1–100:** One level every 10 XP, max level at 1,000 XP.
 * **Rank Titles:** **Novice** $ightarrow$ **Apprentice** (16) $ightarrow$ **Disciplined** (36) $ightarrow$ **Elite** (61) $ightarrow$ **Master** (81) $ightarrow$ **Centurion** (100).
 
@@ -36,7 +37,10 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 
 ### 🗺️ 4. Quests, Study, Calendar & Documents
 * **Quests:** Main quests with weighted subquests (Planning → Complete), progress bars and a notepad.
-* **Study:** "Proof of Work" chapter template (ELI5, toy sandbox, break-it test, active recall) with autosave.
+* **Study:** chapters move through **Not started → Studying → Reviewing → Mastered**.
+  * **Journal** while you study: log each session (notes, time spent, date) and keep a "where I stopped / next step" bookmark.
+  * **Wrap-up** to finish: the "Proof of Work" template (ELI5, toy sandbox, break-it test, recall flashcards) with a completion checklist.
+  * **Spaced repetition** after mastery: flashcard reviews on days 1, 3, 7 and 21 (a struggled review repeats the next day), shown in the Study tab, Calendar and wallpaper. Turn it off per chapter for projects.
 * **Calendar:** Month, Week, Day (time grid with current-time line, overlapping events side by side, mini-month) and searchable Agenda views.
   * Events with start time, duration or all-day, color, notes and a per-event reminder (tray notification), plus an alarm dialog at start time.
   * Repeats: daily, weekdays, weekly, monthly, yearly, with an optional end date. Edit or delete just one occurrence, this and following, or the whole series.

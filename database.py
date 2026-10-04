@@ -3,7 +3,8 @@ import calendar as _calendar
 import secure
 from pathlib import Path
 from datetime import datetime, date, timedelta
-from constants import get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, XP_NOTE_PROGRESS, SCORE_PASSING
+from constants import (get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, XP_NOTE_PROGRESS, SCORE_PASSING,
+                       XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS)
 
 def get_db_path():
     app_data = os.getenv("APPDATA")
@@ -170,6 +171,7 @@ def init_db():
 
     _run_v2_migrations(conn)
     _run_calendar_migrations(conn)
+    _run_study_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -694,49 +696,273 @@ def get_weekly_completed_tasks_count(year: int, week: int):
     conn.close()
     return count
 
-# --- Study Sessions Operations ---
+# --- Study Chapters: journal, stages and spaced-repetition reviews ---
+STUDY_FIELDS = ("id", "topic", "source", "eli5", "code_sandbox", "break_test", "recall_questions",
+                "status", "created_at", "needs_review", "next_step", "mastered_at")
+_EDITABLE_STUDY_FIELDS = {"topic", "source", "eli5", "code_sandbox", "break_test", "recall_questions", "next_step"}
+JOURNAL_FIELDS = ("id", "session_id", "entry_date", "minutes", "notes", "next_step")
+STUDY_LOG_MIN_CHARS = 20  # a journal entry this long earns the daily study XP
+
+
 def get_study_sessions():
+    """Active chapters as dicts (STUDY_FIELDS + journal / review stats), active stages first."""
+    today = date.today().isoformat()
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, topic, source, eli5, code_sandbox, break_test, recall_questions, status, created_at 
-        FROM study_sessions 
-        WHERE active = 1 
-        ORDER BY CASE WHEN status = 'In Progress' THEN 0 ELSE 1 END ASC, id DESC
-    """)
-    rows = cursor.fetchall()
+    rows = conn.execute(f"""
+        SELECT {', '.join('s.' + f for f in STUDY_FIELDS)},
+               (SELECT COUNT(*) FROM study_journal j WHERE j.session_id = s.id),
+               (SELECT COALESCE(SUM(minutes), 0) FROM study_journal j WHERE j.session_id = s.id),
+               (SELECT MAX(entry_date) FROM study_journal j WHERE j.session_id = s.id),
+               (SELECT COUNT(*) FROM study_reviews r WHERE r.session_id = s.id
+                    AND r.done_date = '' AND r.due_date <= ?),
+               (SELECT MIN(due_date) FROM study_reviews r WHERE r.session_id = s.id AND r.done_date = '')
+        FROM study_sessions s
+        WHERE s.active = 1
+    """, (today,)).fetchall()
     conn.close()
-    return rows
+
+    chapters = []
+    for r in rows:
+        ch = dict(zip(STUDY_FIELDS, r[:len(STUDY_FIELDS)]))
+        ch["sessions"], ch["minutes"], ch["last_studied"], ch["reviews_due"], ch["next_review"] = r[len(STUDY_FIELDS):]
+        ch["needs_review"] = bool(ch["needs_review"])
+        for k in ("eli5", "code_sandbox", "break_test", "recall_questions", "next_step", "mastered_at", "source"):
+            ch[k] = ch[k] or ""
+        ch["last_studied"] = ch["last_studied"] or ""
+        ch["next_review"] = ch["next_review"] or ""
+        chapters.append(ch)
+
+    # most recent activity first, then (stable) group: reviews due, active stages, mastered
+    order = {"Studying": 0, "Reviewing": 1, "Not started": 2, "Mastered": 3}
+    chapters.sort(key=lambda c: (c["last_studied"] or (c["created_at"] or "")[:10], c["id"]), reverse=True)
+    chapters.sort(key=lambda c: (c["reviews_due"] == 0, order.get(c["status"], 9)))
+    return chapters
+
+
+def get_study_session(session_id: int):
+    return next((c for c in get_study_sessions() if c["id"] == session_id), None)
+
 
 def add_study_session(topic: str, source: str = "FIAP"):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO study_sessions (topic, source) VALUES (?, ?)", (topic, source))
+    cursor.execute("INSERT INTO study_sessions (topic, source, status) VALUES (?, ?, 'Not started')",
+                   (topic, source))
     session_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return session_id
 
-def update_study_session(session_id: int, topic: str, source: str, eli5: str, code_sandbox: str, break_test: str, recall_questions: str, status: str):
+
+def update_study_session(session_id: int, **fields):
+    """Updates text fields (topic, source, wrap-up boxes, next_step). Status: use set_study_status."""
+    unknown = set(fields) - _EDITABLE_STUDY_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown study fields: {sorted(unknown)}")
+    if not fields:
+        return
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE study_sessions
-        SET topic = ?, source = ?, eli5 = ?, code_sandbox = ?, break_test = ?, recall_questions = ?,
-            status = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (topic, source, eli5, code_sandbox, break_test, recall_questions, status, session_id))
-    if status == "Mastered":
-        _ledger_set(cursor, "study", str(session_id), date.today().isoformat(), XP_STUDY, replace=False)
-    else:
-        _ledger_clear(cursor, "study", str(session_id))
+    conn.execute(
+        f"UPDATE study_sessions SET {', '.join(f'{k} = ?' for k in fields)}, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?", (*fields.values(), session_id))
     conn.commit()
     conn.close()
+
 
 def delete_study_session(session_id: int):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE study_sessions SET active = 0 WHERE id = ?", (session_id,))
+    cursor.execute("DELETE FROM study_reviews WHERE session_id = ? AND done_date = ''", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def _schedule_review(cursor, session_id: int, review_no: int, due: date):
+    cursor.execute("INSERT INTO study_reviews (session_id, review_no, due_date) VALUES (?, ?, ?)",
+                   (session_id, review_no, due.isoformat()))
+
+
+def _review_series_finished(cursor, session_id: int) -> bool:
+    return cursor.execute(
+        "SELECT 1 FROM study_reviews WHERE session_id = ? AND review_no = ? AND remembered = 1",
+        (session_id, len(REVIEW_DAYS))).fetchone() is not None
+
+
+def _start_reviews(cursor, session_id: int, start: date):
+    """(Re)starts the review series: review 1 is due REVIEW_DAYS[0] days after `start`."""
+    cursor.execute("DELETE FROM study_reviews WHERE session_id = ? AND done_date = ''", (session_id,))
+    _schedule_review(cursor, session_id, 1, start + timedelta(days=REVIEW_DAYS[0]))
+
+
+def set_study_status(session_id: int, status: str, on: date = None):
+    """Moves a chapter between STUDY_STAGES. Mastering awards XP_STUDY and starts the reviews."""
+    if status not in STUDY_STAGES:
+        raise ValueError(f"Unknown study status: {status}")
+    on = on or date.today()
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT status, needs_review FROM study_sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row or row[0] == status:
+        conn.close()
+        return
+    if status == "Mastered":
+        cursor.execute("UPDATE study_sessions SET status = ?, mastered_at = ?, updated_at = CURRENT_TIMESTAMP "
+                       "WHERE id = ?", (status, on.isoformat(), session_id))
+        _ledger_set(cursor, "study", str(session_id), on.isoformat(), XP_STUDY, replace=False)
+        if row[1]:
+            _start_reviews(cursor, session_id, on)
+    else:
+        cursor.execute("UPDATE study_sessions SET status = ?, mastered_at = '', updated_at = CURRENT_TIMESTAMP "
+                       "WHERE id = ?", (status, session_id))
+        _ledger_clear(cursor, "study", str(session_id))
+        cursor.execute("DELETE FROM study_reviews WHERE session_id = ? AND done_date = ''", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def set_study_needs_review(session_id: int, needs_review: bool, on: date = None):
+    """Turns spaced repetition on/off for a chapter (off for projects that need no review)."""
+    on = on or date.today()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE study_sessions SET needs_review = ? WHERE id = ?", (1 if needs_review else 0, session_id))
+    if not needs_review:
+        cursor.execute("DELETE FROM study_reviews WHERE session_id = ? AND done_date = ''", (session_id,))
+    else:
+        status = cursor.execute("SELECT status FROM study_sessions WHERE id = ?", (session_id,)).fetchone()
+        pending = cursor.execute("SELECT 1 FROM study_reviews WHERE session_id = ? AND done_date = ''",
+                                 (session_id,)).fetchone()
+        if status and status[0] == "Mastered" and not pending and not _review_series_finished(cursor, session_id):
+            _start_reviews(cursor, session_id, on)
+    conn.commit()
+    conn.close()
+
+
+def get_study_reviews(session_id: int):
+    """All reviews of a chapter (done and pending), oldest first."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT id, review_no, due_date, done_date, remembered FROM study_reviews
+        WHERE session_id = ? ORDER BY due_date ASC, id ASC
+    """, (session_id,)).fetchall()
+    conn.close()
+    return [{"id": r[0], "review_no": r[1], "due_date": r[2], "done_date": r[3] or "",
+             "remembered": None if r[4] is None else bool(r[4])} for r in rows]
+
+
+def get_pending_reviews(until: date = None):
+    """Pending reviews due on or before `until` (default: all), with the chapter topic."""
+    conn = get_connection()
+    query = """
+        SELECT r.id, r.session_id, s.topic, r.review_no, r.due_date
+        FROM study_reviews r JOIN study_sessions s ON s.id = r.session_id
+        WHERE r.done_date = '' AND s.active = 1
+    """
+    params = ()
+    if until is not None:
+        query += " AND r.due_date <= ?"
+        params = (until.isoformat(),)
+    rows = conn.execute(query + " ORDER BY r.due_date ASC, s.topic ASC", params).fetchall()
+    conn.close()
+    return [{"id": r[0], "session_id": r[1], "topic": r[2], "review_no": r[3], "due_date": r[4]} for r in rows]
+
+
+def complete_review(review_id: int, remembered: bool = True, on: date = None) -> float:
+    """Marks a review done (+XP_REVIEW) and schedules the next one.
+
+    remembered=False repeats the same review tomorrow instead of moving on.
+    """
+    on = on or date.today()
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT session_id, review_no, done_date FROM study_reviews WHERE id = ?",
+                         (review_id,)).fetchone()
+    if not row or row[2]:
+        conn.close()
+        return 0.0
+    session_id, review_no, _ = row
+    cursor.execute("UPDATE study_reviews SET done_date = ?, remembered = ? WHERE id = ?",
+                   (on.isoformat(), 1 if remembered else 0, review_id))
+    _ledger_set(cursor, "study_review", str(review_id), on.isoformat(), XP_REVIEW, replace=False)
+    if not remembered:
+        _schedule_review(cursor, session_id, review_no, on + timedelta(days=1))
+    elif review_no < len(REVIEW_DAYS):
+        gap = REVIEW_DAYS[review_no] - REVIEW_DAYS[review_no - 1]
+        _schedule_review(cursor, session_id, review_no + 1, on + timedelta(days=gap))
+    conn.commit()
+    conn.close()
+    return float(XP_REVIEW)
+
+
+def _refresh_study_log_xp(cursor, session_id: int, entry_date: str):
+    """One XP_STUDY_LOG per chapter per day, while a long-enough entry exists that day."""
+    ref = f"{session_id}:{entry_date}"
+    qualifies = cursor.execute(
+        "SELECT 1 FROM study_journal WHERE session_id = ? AND entry_date = ? AND LENGTH(TRIM(notes)) >= ?",
+        (session_id, entry_date, STUDY_LOG_MIN_CHARS)).fetchone()
+    if qualifies:
+        _ledger_set(cursor, "study_log", ref, entry_date, XP_STUDY_LOG, replace=False)
+    else:
+        _ledger_clear(cursor, "study_log", ref)
+
+
+def get_journal(session_id: int):
+    conn = get_connection()
+    rows = conn.execute(f"""
+        SELECT {', '.join(JOURNAL_FIELDS)} FROM study_journal
+        WHERE session_id = ? ORDER BY entry_date DESC, id DESC
+    """, (session_id,)).fetchall()
+    conn.close()
+    return [dict(zip(JOURNAL_FIELDS, r)) for r in rows]
+
+
+def add_journal_entry(session_id: int, notes: str, minutes: int = 0, next_step: str = "",
+                      entry_date: str = None) -> float:
+    """Logs a study session. Returns the XP gained (first qualifying entry of the day)."""
+    entry_date = entry_date or date.today().isoformat()
+    conn = get_connection()
+    cursor = conn.cursor()
+    had_xp = cursor.execute("SELECT 1 FROM xp_ledger WHERE source = 'study_log' AND ref_key = ?",
+                            (f"{session_id}:{entry_date}",)).fetchone()
+    cursor.execute("""
+        INSERT INTO study_journal (session_id, entry_date, minutes, notes, next_step)
+        VALUES (?, ?, ?, ?, ?)
+    """, (session_id, entry_date, minutes or 0, notes, next_step))
+    if next_step.strip():
+        cursor.execute("UPDATE study_sessions SET next_step = ? WHERE id = ?", (next_step.strip(), session_id))
+    cursor.execute("UPDATE study_sessions SET status = 'Studying' WHERE id = ? AND status = 'Not started'",
+                   (session_id,))
+    _refresh_study_log_xp(cursor, session_id, entry_date)
+    has_xp = cursor.execute("SELECT 1 FROM xp_ledger WHERE source = 'study_log' AND ref_key = ?",
+                            (f"{session_id}:{entry_date}",)).fetchone()
+    conn.commit()
+    conn.close()
+    return float(XP_STUDY_LOG) if has_xp and not had_xp else 0.0
+
+
+def update_journal_entry(entry_id: int, notes: str, minutes: int, next_step: str, entry_date: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    old = cursor.execute("SELECT session_id, entry_date FROM study_journal WHERE id = ?", (entry_id,)).fetchone()
+    if not old:
+        conn.close()
+        return
+    cursor.execute("UPDATE study_journal SET notes = ?, minutes = ?, next_step = ?, entry_date = ? WHERE id = ?",
+                   (notes, minutes or 0, next_step, entry_date, entry_id))
+    for d in {old[1], entry_date}:
+        _refresh_study_log_xp(cursor, old[0], d)
+    conn.commit()
+    conn.close()
+
+
+def delete_journal_entry(entry_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    old = cursor.execute("SELECT session_id, entry_date FROM study_journal WHERE id = ?", (entry_id,)).fetchone()
+    if old:
+        cursor.execute("DELETE FROM study_journal WHERE id = ?", (entry_id,))
+        _refresh_study_log_xp(cursor, old[0], old[1])
     conn.commit()
     conn.close()
 
@@ -1417,6 +1643,45 @@ def _run_calendar_migrations(conn):
             event_id INTEGER NOT NULL,
             exception_date TEXT NOT NULL,
             UNIQUE(event_id, exception_date)
+        )
+    """)
+
+
+def _run_study_migrations(conn):
+    """Study overhaul: stages, journal, next step and spaced-repetition reviews."""
+    cols = {info[1] for info in conn.execute("PRAGMA table_info(study_sessions)")}
+    for name, ddl in (
+        ("needs_review", "INTEGER DEFAULT 1"),
+        ("next_step", "TEXT DEFAULT ''"),
+        ("mastered_at", "TEXT DEFAULT ''"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE study_sessions ADD COLUMN {name} {ddl}")
+    conn.execute("UPDATE study_sessions SET status = 'Studying' WHERE status = 'In Progress'")
+    conn.execute("""
+        UPDATE study_sessions SET mastered_at = COALESCE(date(updated_at), date('now', 'localtime'))
+        WHERE status = 'Mastered' AND COALESCE(mastered_at, '') = ''
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS study_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            entry_date TEXT NOT NULL,
+            minutes INTEGER DEFAULT 0,
+            notes TEXT DEFAULT '',
+            next_step TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS study_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            review_no INTEGER NOT NULL,
+            due_date TEXT NOT NULL,
+            done_date TEXT DEFAULT '',
+            remembered INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 

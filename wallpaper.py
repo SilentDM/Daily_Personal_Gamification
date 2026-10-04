@@ -4,6 +4,7 @@ import logging
 import textwrap
 import threading
 import database as db
+from datetime import date
 from constants import SCORE_PASSING, SCORE_ORANGE
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -99,9 +100,12 @@ def render_wallpaper():
             f"{t[1]} ({int(t[7])}%)" if t[7] > 0 else t[1]
             for t in tasks if t[2] != "Complete"][:3]
         
-        # In-Progress Study Chapters
+        # Active study chapters (with where I stopped) and spaced-repetition reviews due
         study_sessions = db.get_study_sessions()
-        active_studies = [f"{s[1]} ({s[2]})" for s in study_sessions if s[7] == "In Progress"][:2]
+        active_studies = [
+            f"{s['topic']} -> {s['next_step']}" if s["next_step"] else f"{s['topic']} ({s['source']})"
+            for s in study_sessions if s["status"] in ("Studying", "Reviewing")][:2]
+        reviews_due = db.get_pending_reviews(until=date.today())
 
         show_quests = settings.get("show_quests", "true") == "true"
         show_studies = settings.get("show_studies", "true") == "true"
@@ -121,10 +125,13 @@ def render_wallpaper():
 
         study_lines = []
         if show_studies:
+            if reviews_due:
+                topics = ", ".join(r["topic"] for r in reviews_due[:2]) + ("..." if len(reviews_due) > 2 else "")
+                study_lines.extend(wrap_bullet_lines(f"REVIEW DUE ({len(reviews_due)}): {topics}", max_chars=40))
             if active_studies:
                 for s in active_studies:
                     study_lines.extend(wrap_bullet_lines(s, max_chars=40))
-            else:
+            elif not reviews_due:
                 study_lines.append("• No active chapters right now.")
 
         # Compute dynamic HUD box height
@@ -218,7 +225,7 @@ def render_wallpaper():
         # Active Study Chapters Section (Multi-line wrapped)
         if show_studies:
             draw.line([x1 + 25, curr_y + 4, x2 - 25, curr_y + 4], fill=(50, 60, 75, 255), width=1)
-            draw.text((x1 + 25, curr_y + 12), "IN-PROGRESS STUDIES:", fill=accent["header"], font=font_sub)
+            draw.text((x1 + 25, curr_y + 12), "STUDIES:", fill=accent["header"], font=font_sub)
             curr_y += 32
 
             for line in study_lines:

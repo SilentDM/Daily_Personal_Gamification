@@ -5,6 +5,7 @@ import flet as ft
 
 import database as db
 from constants import DAY_NAMES, XP_EVENT
+from study_view import open_review_dialog, REVIEW_COLOR
 from ui_helpers import confirm_action
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
@@ -265,11 +266,58 @@ class CalendarView(ft.Column):
             padding=ft.Padding.only(left=16, right=16, top=14, bottom=10),
         )
 
+    # ------------------------------------------------------------ study reviews
+    def _reviews_by_day(self, start: date, end: date):
+        """Pending study reviews per day; overdue ones are shown on today."""
+        today = date.today()
+        out = {}
+        for r in db.get_pending_reviews(until=end):
+            d = max(date.fromisoformat(r["due_date"]), today)
+            if start <= d <= end:
+                out.setdefault(d, []).append(r)
+        return out
+
+    def _open_review(self, review):
+        open_review_dialog(self.app_page, review, on_done=self._changed)
+
+    def _review_chip(self, review):
+        overdue = date.fromisoformat(review["due_date"]) < date.today()
+        return ft.Container(
+            content=ft.Text(f"📚 Review: {review['topic']}", size=11, no_wrap=True,
+                            overflow=ft.TextOverflow.ELLIPSIS, color=ft.Colors.BLACK),
+            bgcolor=ft.Colors.RED_ACCENT_100 if overdue else REVIEW_COLOR,
+            border_radius=4,
+            padding=ft.Padding.symmetric(horizontal=5, vertical=1),
+            tooltip=f"Study review {review['review_no']}" + (" (overdue)" if overdue else ""),
+            on_click=lambda e, r=review: self._open_review(r),
+        )
+
+    def _review_row(self, review, compact: bool = False):
+        overdue = date.fromisoformat(review["due_date"]) < date.today()
+        return ft.Container(
+            content=ft.Row([
+                ft.IconButton(ft.Icons.REPLAY, icon_color=REVIEW_COLOR, icon_size=18 if compact else 22,
+                              tooltip="Start review", on_click=lambda e, r=review: self._open_review(r)),
+                ft.Container(width=4, height=28 if compact else 36, bgcolor=REVIEW_COLOR, border_radius=2),
+                ft.Column([
+                    ft.Text(f"Review: {review['topic']}", size=13 if compact else 14, weight=ft.FontWeight.W_600,
+                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Text(f"Study review {review['review_no']}" +
+                            (f" • overdue since {date.fromisoformat(review['due_date']):%d/%m}" if overdue else ""),
+                            size=11, color=ft.Colors.RED_ACCENT_100 if overdue else ft.Colors.GREY_400),
+                ], spacing=0, expand=True, tight=True),
+            ], spacing=8),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=8,
+            padding=ft.Padding.only(right=10, top=2, bottom=2), ink=True,
+            on_click=lambda e, r=review: self._open_review(r),
+        )
+
     # ------------------------------------------------------------ month
     def _month_view(self):
         weeks = calendar.Calendar(firstweekday=0).monthdatescalendar(self.anchor.year, self.anchor.month)
         by_day = db.get_events_between(weeks[0][0], weeks[-1][-1])
         done = db.get_completed_events(weeks[0][0].isoformat(), weeks[-1][-1].isoformat())
+        reviews = self._reviews_by_day(weeks[0][0], weeks[-1][-1])
         today = date.today()
 
         header = ft.Row([
@@ -284,12 +332,12 @@ class CalendarView(ft.Column):
         for week in weeks:
             cells = []
             for d in week:
-                cells.append(self._month_cell(d, by_day[d], done, today))
+                cells.append(self._month_cell(d, by_day[d], done, today, reviews.get(d, [])))
             rows.append(ft.Row(cells, spacing=4, expand=True,
                                vertical_alignment=ft.CrossAxisAlignment.STRETCH))
         return ft.Column([header, *rows], spacing=4, expand=True)
 
-    def _month_cell(self, d: date, occs, done, today):
+    def _month_cell(self, d: date, occs, done, today, reviews=()):
         in_month = d.month == self.anchor.month
         is_today = d == today
         max_chips = 3
@@ -300,9 +348,12 @@ class CalendarView(ft.Column):
             bgcolor=ft.Colors.CYAN_ACCENT if is_today else None,
             border_radius=12, width=24, height=24, alignment=ft.Alignment.CENTER,
         )
-        chips = [self._chip(o, (o["id"], o["date"]) in done) for o in occs[:max_chips]]
-        if len(occs) > max_chips:
-            chips.append(ft.Text(f"+{len(occs) - max_chips} more", size=10, color=ft.Colors.CYAN_ACCENT))
+        chips = [self._review_chip(r) for r in reviews]
+        chips += [self._chip(o, (o["id"], o["date"]) in done) for o in occs]
+        total = len(chips)
+        chips = chips[:max_chips]
+        if total > max_chips:
+            chips.append(ft.Text(f"+{total - max_chips} more", size=10, color=ft.Colors.CYAN_ACCENT))
 
         return ft.Container(
             content=ft.Column([number, *chips], spacing=2, tight=True),
@@ -371,13 +422,15 @@ class CalendarView(ft.Column):
 
         # all-day strip (only when there is something to show)
         all_day_row = None
-        if any(o["all_day"] for d in days for o in by_day[d]):
+        reviews = self._reviews_by_day(days[0], days[-1])
+        if reviews or any(o["all_day"] for d in days for o in by_day[d]):
             cells = [ft.Container(content=ft.Text("all-day", size=10, color=ft.Colors.GREY_500),
                                   width=GUTTER_WIDTH, alignment=ft.Alignment.CENTER_RIGHT,
                                   padding=ft.Padding.only(right=6))]
             for d in days:
                 cells.append(ft.Container(
-                    content=ft.Column([self._chip(o, (o["id"], o["date"]) in done)
+                    content=ft.Column([self._review_chip(r) for r in reviews.get(d, [])] +
+                                      [self._chip(o, (o["id"], o["date"]) in done)
                                        for o in by_day[d] if o["all_day"]], spacing=2, tight=True),
                     expand=True, padding=2,
                 ))
@@ -528,11 +581,13 @@ class CalendarView(ft.Column):
         occs = db.get_events_for_date(a)
         done = db.get_completed_events(a.isoformat(), a.isoformat())
         n_done = sum(1 for o in occs if (o["id"], o["date"]) in done)
+        day_reviews = self._reviews_by_day(a, a).get(a, [])
         summary = ft.Column([
             ft.Text("DAY SUMMARY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
             ft.Text(f"{len(occs)} event(s) • {n_done} done • +{n_done * XP_EVENT} XP", size=13),
+            *[self._review_row(r, compact=True) for r in day_reviews],
             *[self._agenda_row(o, (o["id"], o["date"]) in done, compact=True) for o in occs],
-        ] if occs else [
+        ] if occs or day_reviews else [
             ft.Text("DAY SUMMARY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
             ft.Text("Nothing scheduled. Click an hour to add an event.", size=12, color=ft.Colors.GREY_500),
         ], spacing=6)
@@ -559,15 +614,18 @@ class CalendarView(ft.Column):
             start, end = self.anchor, self.anchor + timedelta(days=AGENDA_DAYS - 1)
         by_day = db.get_events_between(start, end)
         done = db.get_completed_events(start.isoformat(), end.isoformat())
+        reviews = self._reviews_by_day(start, end)
         needle = self.search.lower()
         today = date.today()
 
         items = []
         for d in sorted(by_day):
             occs = by_day[d]
+            day_reviews = reviews.get(d, [])
             if needle:
                 occs = [o for o in occs if needle in o["title"].lower() or needle in o["notes"].lower()]
-            if not occs:
+                day_reviews = [r for r in day_reviews if needle in r["topic"].lower()]
+            if not occs and not day_reviews:
                 continue
             label = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else \
                 "Yesterday" if d == today - timedelta(days=1) else fmt_date_short(d)
@@ -580,6 +638,7 @@ class CalendarView(ft.Column):
                 padding=ft.Padding.only(top=12, bottom=4),
                 on_click=lambda e, day=d: self.open_day(day),
             ))
+            items.extend(self._review_row(r) for r in day_reviews)
             items.extend(self._agenda_row(o, (o["id"], o["date"]) in done) for o in occs)
 
         if not items:

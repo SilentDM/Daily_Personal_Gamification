@@ -27,7 +27,13 @@ XP_QUEST = 15
 XP_STUDY = 15
 XP_EVENT = 10
 XP_NOTE_PROGRESS = 2.0
+XP_STUDY_LOG = 2.0   # first journal entry of the day per chapter
+XP_REVIEW = 5        # each spaced-repetition review completed
 QUEST_BONUS_XP = XP_QUEST  # alias kept for todo_view
+
+# Study chapters: stages and spaced-repetition review days (counted from mastery)
+STUDY_STAGES = ["Not started", "Studying", "Reviewing", "Mastered"]
+REVIEW_DAYS = (1, 3, 7, 21)
 
 # Daily score thresholds (0-10 scale), shared by streak, table colors and charts
 SCORE_PASSING = 7.0
