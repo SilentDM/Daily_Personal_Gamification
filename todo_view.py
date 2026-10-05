@@ -94,9 +94,9 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
         sub_rows = []
         for s in plan.subquests:
             cb = ft.Checkbox(value=True)
-            tf = ft.TextField(value=s, dense=True, expand=True, text_size=13)
+            tf = ft.TextField(value=s, dense=True, expand=True, text_size=13, multiline=True, min_lines=1, max_lines=4)
             sub_rows.append((cb, tf))
-            rows.append(ft.Row([cb, tf], spacing=4))
+            rows.append(ft.Row([cb, tf], spacing=4, vertical_alignment=ft.CrossAxisAlignment.START))
         state["subs"] = sub_rows
         if existing:
             controls = [ft.Text("Suggested extra steps (untick the ones you don't want):", size=12,

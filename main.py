@@ -273,9 +273,19 @@ def main(page: ft.Page):
         )
         page.show_dialog(dlg)
 
+    def doc_reminder_text(doc, stage):
+        exp = date.fromisoformat(doc["expiration_date"])
+        if stage == "due":
+            return f"'{doc['title']}' " + ("expires today." if doc["days_left"] == 0 else
+                                          f"expired on {exp:%d/%m/%Y}.") + " Renew it when you can."
+        if stage == "week":
+            return f"'{doc['title']}' expires in {doc['days_left']} days ({exp:%d/%m/%Y})."
+        return f"'{doc['title']}' expires on {exp:%d/%m/%Y} — time to plan the renewal."
+
     def reminder_loop():
         last_checked_day = date.today()
         last_checked_hour = datetime.now().hour
+        next_doc_check = time.monotonic() + 60  # shortly after startup, then hourly
 
         while True:
             time.sleep(20)
@@ -300,7 +310,20 @@ def main(page: ft.Page):
                     update_desktop_wallpaper()
                     ai_review.retry_pending(on_done=study_view._ai_done)  # queued/failed AI review packs
 
-                # 3. Calendar reminders (each event has its own lead time) and start alarms
+                # 3. Documents: renewal quests + tray reminders at milestones (08:00-22:00)
+                if time.monotonic() >= next_doc_check:
+                    next_doc_check = time.monotonic() + 3600
+                    if db.sync_renewal_quests():
+                        todo_view.render()
+                    if 8 <= now.hour < 22:
+                        for doc, stage in db.get_doc_notifications():
+                            try:
+                                tray_icon_instance.notify(doc_reminder_text(doc, stage), "Document reminder")
+                                db.mark_doc_notified(doc["id"], stage)
+                            except Exception:
+                                log.exception("document notification failed")
+
+                # 4. Calendar reminders (each event has its own lead time) and start alarms
                 tomorrow = today + timedelta(days=1)
                 done = db.get_completed_events(today_str, tomorrow.isoformat())
                 for day_events in db.get_events_between(today, tomorrow).values():

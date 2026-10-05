@@ -1,588 +1,562 @@
-import flet as ft
-import json
+"""Documents: a lean expiration tracker. Only name, type and expiration date are required; the number
+and notes are optional, encrypted, and (with a PIN) hidden until unlocked."""
 import subprocess
 import threading
-from datetime import datetime, date
+import time
+from datetime import date
+
+import flet as ft
+
 import database as db
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 from ui_helpers import confirm_action
+from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
-CATEGORIES = ["All", "Identity", "Vehicles", "Housing & Finance", "Other"]
-
-DOC_TYPE_PRESETS = {
-    "Identity": ["CPF", "RG / CIN", "Passaporte", "Título de Eleitor", "Certidão", "Outro"],
-    "Vehicles": ["CNH", "CRLV / Carro", "CRLV / Moto", "Seguro Auto", "Outro"],
-    "Housing & Finance": ["IPTU", "Contrato de Aluguel", "Seguro Residencial", "Escritura", "Outro"],
-    "Other": ["Cartão de Vacina", "Exame Médico", "Certificado", "Outro"]
+CATEGORY_ICONS = {
+    "Identity": (ft.Icons.BADGE_OUTLINED, ft.Colors.BLUE_300),
+    "Vehicle": (ft.Icons.DIRECTIONS_CAR_OUTLINED, ft.Colors.AMBER_300),
+    "Home": (ft.Icons.HOME_OUTLINED, ft.Colors.PURPLE_200),
+    "Health": (ft.Icons.HEALTH_AND_SAFETY_OUTLINED, ft.Colors.GREEN_300),
+    "Other": (ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.GREY_400),
 }
-
-CATEGORY_COLORS = {
-    "Identity": ft.Colors.BLUE_400,
-    "Vehicles": ft.Colors.AMBER_400,
-    "Housing & Finance": ft.Colors.PURPLE_300,
-    "Other": ft.Colors.GREY_400
+STATUS_STYLE = {
+    "expired": (ft.Colors.RED_ACCENT, ft.Icons.ERROR_OUTLINE),
+    "soon": (ft.Colors.AMBER_ACCENT, ft.Icons.SCHEDULE),
+    "ok": (ft.Colors.GREEN_ACCENT, ft.Icons.CHECK_CIRCLE_OUTLINE),
 }
+WARN_OPTIONS = [7, 15, 30, 60, 90, 180, 365]
+UNLOCK_MINUTES = 5
+CLIPBOARD_CLEAR_SECONDS = 30
 
+
+# ---------------------------------------------------------------- helpers
 def copy_to_windows_clipboard(text: str):
-    """Native Windows clipboard utility - 100% synchronous and zero dependencies."""
     if not text:
         return
     try:
         subprocess.run("clip", input=text.encode("utf-16"), check=True, creationflags=0x08000000)
     except Exception:
-        try:
-            import tkinter as tk
-            r = tk.Tk()
-            r.withdraw()
-            r.clipboard_clear()
-            r.clipboard_append(text)
-            r.update()
-            r.destroy()
-        except Exception:
-            pass
+        pass
 
-def parse_flexible_date(date_str: str):
-    return db.parse_flexible_date(date_str)  # single implementation lives in database.py
-
-def format_to_dd_mm_yy(date_str: str) -> str:
-    """Converts any recognized date string to dd-mm-yy format."""
-    d = parse_flexible_date(date_str)
-    if d:
-        return d.strftime("%d-%m-%y")
-    return date_str.strip()
 
 def clear_clipboard_if_unchanged(text: str):
-    """Wipes the clipboard 30s after copying a document number (only if still ours)."""
+    """Wipes the clipboard after a while (only if it still holds what we copied)."""
     try:
-        cur = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
-            capture_output=True, text=True, timeout=10, creationflags=0x08000000
-        ).stdout.strip()
+        cur = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+                             capture_output=True, text=True, timeout=10, creationflags=0x08000000).stdout.strip()
         if cur == text.strip():
             subprocess.run("clip", input=b"", creationflags=0x08000000)
     except Exception:
         pass
 
+
 def mask_number(val: str) -> str:
-    clean = val.strip()
-    if not clean:
-        return ""
+    clean = (val or "").strip()
     if len(clean) <= 4:
         return "••••"
-    visible = 3 if len(clean) > 8 else 2
-    return clean[:visible] + "•" * (len(clean) - visible * 2) + clean[-visible:]
+    return "•" * min(8, len(clean) - 4) + clean[-4:]
 
+
+def status_text(doc) -> str:
+    days = doc["days_left"]
+    exp = date.fromisoformat(doc["expiration_date"])
+    if doc["status"] == "expired":
+        return f"Expired {abs(days)} day{'s' if abs(days) != 1 else ''} ago"
+    if days == 0:
+        return "Expires today"
+    if doc["status"] == "soon":
+        return f"Expires in {days} day{'s' if days != 1 else ''}"
+    return f"Valid until {exp:%d/%m/%Y}"
+
+
+def type_options():
+    return [ft.DropdownOption(key=t, text=f"{cat} · {t}") for cat, types in db.DOC_TYPES.items() for t, _, _ in types]
+
+
+def warn_label(days: int) -> str:
+    if days % 365 == 0 and days:
+        return f"{days // 365} year{'s' if days > 365 else ''} before"
+    if days >= 60 and days % 30 == 0:
+        return f"{days // 30} months before"
+    return f"{days} days before"
+
+
+class _Lock:
+    """Session unlock for numbers/notes when a PIN is set (re-locks after UNLOCK_MINUTES)."""
+
+    def __init__(self):
+        self.until = 0.0
+
+    def unlocked(self) -> bool:
+        return not db.has_doc_pin() or time.monotonic() < self.until
+
+    def unlock(self):
+        self.until = time.monotonic() + UNLOCK_MINUTES * 60
+
+    def lock(self):
+        self.until = 0.0
+
+
+LOCK = _Lock()
+
+
+def ask_pin(page: ft.Page, on_ok, title="Unlock documents"):
+    """Asks for the PIN (if one is set) and calls on_ok() when it matches."""
+    if LOCK.unlocked():
+        on_ok()
+        return
+    pin_f = ft.TextField(label="PIN", password=True, can_reveal_password=True, autofocus=True, dense=True,
+                         keyboard_type=ft.KeyboardType.NUMBER)
+    error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
+
+    def submit(e=None):
+        if db.check_doc_pin(pin_f.value or ""):
+            LOCK.unlock()
+            page.pop_dialog()
+            on_ok()
+        else:
+            error.value = "Wrong PIN."
+            pin_f.value = ""
+            page.update()
+
+    pin_f.on_submit = submit
+    page.show_dialog(ft.AlertDialog(
+        modal=True, title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE), ft.Text(title, weight=ft.FontWeight.BOLD)]),
+        content=ft.Container(width=320, content=ft.Column(
+            [ft.Text(f"Numbers and notes stay visible for {UNLOCK_MINUTES} minutes.", size=12,
+                     color=ft.Colors.GREY_400), pin_f, error], spacing=10, tight=True)),
+        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                 ft.Button("Unlock", icon=ft.Icons.LOCK_OPEN, on_click=submit)]))
+
+
+def open_renew_dialog(page: ft.Page, doc: dict, on_done=None):
+    """'Renewed': records the new expiration date (and completes the renewal quest, if any)."""
+    suggested = db.suggested_renewal_date(doc)
+    date_f = ft.TextField(label="New expiration date (DD/MM/YYYY)", value=f"{suggested:%d/%m/%Y}", dense=True,
+                          autofocus=True)
+    error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
+    old = date.fromisoformat(doc["expiration_date"])
+
+    def plus_years(n):
+        def handler(e):
+            try:
+                new = old.replace(year=old.year + n)
+            except ValueError:
+                new = old.replace(year=old.year + n, day=28)
+            date_f.value = f"{new:%d/%m/%Y}"
+            page.update()
+        return handler
+
+    def save(e=None):
+        new = db.parse_flexible_date(date_f.value or "")
+        if not new:
+            error.value = "Use DD/MM/YYYY."
+            page.update()
+            return
+        if new <= date.today():
+            error.value = "The new expiration date should be in the future."
+            page.update()
+            return
+        xp = db.renew_doc(doc["id"], new.isoformat())
+        page.pop_dialog()
+        update_desktop_wallpaper()
+        if on_done:
+            on_done(xp)
+
+    date_f.on_submit = save
+    page.show_dialog(ft.AlertDialog(
+        modal=True,
+        title=ft.Row([ft.Icon(ft.Icons.AUTORENEW, color=ft.Colors.GREEN_ACCENT),
+                      ft.Text(f"Renewed: {doc['title']}", weight=ft.FontWeight.BOLD, expand=True)]),
+        content=ft.Container(width=420, content=ft.Column([
+            ft.Text(f"Previous expiration: {old:%d/%m/%Y}" + (" • renews every year" if doc["annual"] else ""),
+                    size=12, color=ft.Colors.GREY_400),
+            date_f,
+            ft.Row([ft.OutlinedButton(f"+{n} year{'s' if n > 1 else ''}", on_click=plus_years(n)) for n in (1, 5, 10)],
+                   spacing=6),
+            ft.Text("If a renewal quest is open for it, it will be completed (+XP).", size=11,
+                    color=ft.Colors.GREY_500),
+            error,
+        ], spacing=10, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                 ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]))
+
+
+def open_doc_summary(page: ft.Page, doc: dict, on_done=None):
+    """Compact view used by the Calendar: status + 'Renewed'."""
+    color, icon = STATUS_STYLE[doc["status"]]
+    exp = date.fromisoformat(doc["expiration_date"])
+
+    def renew(e):
+        page.pop_dialog()
+        open_renew_dialog(page, doc, on_done=lambda xp: on_done and on_done())
+
+    page.show_dialog(ft.AlertDialog(
+        title=ft.Row([ft.Icon(CATEGORY_ICONS.get(doc["category"], CATEGORY_ICONS["Other"])[0]),
+                      ft.Text(doc["title"], weight=ft.FontWeight.BOLD, expand=True)]),
+        content=ft.Container(width=400, content=ft.Column([
+            ft.Row([ft.Icon(icon, color=color, size=18), ft.Text(status_text(doc), color=color,
+                                                                 weight=ft.FontWeight.BOLD)]),
+            ft.Text(f"{doc['doc_type']} • expires {exp:%d/%m/%Y}" + (" • yearly" if doc["annual"] else ""), size=13),
+            ft.Text(f"Reminder starts {date.fromisoformat(doc['warn_start']):%d/%m/%Y} "
+                    f"({warn_label(doc['warn_days'])})", size=12, color=ft.Colors.GREY_400),
+        ], spacing=8, tight=True)),
+        actions=[ft.TextButton("Close", on_click=lambda e: page.pop_dialog()),
+                 ft.Button("Renewed", icon=ft.Icons.AUTORENEW, on_click=renew)]))
+
+
+# ---------------------------------------------------------------- view
 class DocumentsView(ft.Column):
     def __init__(self, page: ft.Page):
-        super().__init__(scroll=ft.ScrollMode.AUTO, expand=True, visible=False)
+        super().__init__(scroll=ft.ScrollMode.AUTO, expand=True, visible=False, spacing=12)
         self.app_page = page
-        self.current_filter = "All"
-        self.unmasked_doc_ids = set()
-
-        # Inline Editor State
-        self.show_editor = False
-        self.editing_doc_id = None
-        self.custom_fields = []
-
-        # Form controls with dd-mm-yy labels
-        self.cat_dropdown = ft.Dropdown(
-            label="Category",
-            value="Identity",
-            options=[ft.DropdownOption(c) for c in CATEGORIES if c != "All"],
-            dense=True,
-            width=200
-        )
-        self.type_dropdown = ft.Dropdown(
-            label="Document Type",
-            value="CPF",
-            options=[ft.DropdownOption(t) for t in DOC_TYPE_PRESETS["Identity"]],
-            dense=True,
-            width=200
-        )
-        self.title_input = ft.TextField(label="Title / Name * (Required)", hint_text="e.g. Minha CNH, Civic 2020", dense=True, expand=True)
-        self.number_input = ft.TextField(label="Main Document Number / Code (Optional)", dense=True, expand=True)
-        self.issue_input = ft.TextField(label="Issue Date (DD-MM-YY, Optional)", hint_text="e.g. 14-05-22", dense=True, width=240)
-        self.expiration_input = ft.TextField(label="Expiration Date (DD-MM-YY, Optional)", hint_text="e.g. 20-11-26", dense=True, width=240)
-        self.notes_input = ft.TextField(label="General Notes & Emergency Instructions (Optional)", multiline=True, min_lines=2, max_lines=4, dense=True)
-
-        def on_cat_change(e):
-            types = DOC_TYPE_PRESETS.get(self.cat_dropdown.value, ["Outro"])
-            self.type_dropdown.options = [ft.DropdownOption(t) for t in types]
-            self.type_dropdown.value = types[0]
-            if self.app_page:
-                self.app_page.update()
-
-        self.cat_dropdown.on_select = on_cat_change
+        self.revealed = set()   # doc ids whose number is shown
+        self.feedback = ""
         self.render()
 
-    def set_filter(self, cat: str):
-        self.current_filter = cat
-        self.render()
-
-    def toggle_mask(self, doc_id: int):
-        if doc_id in self.unmasked_doc_ids:
-            self.unmasked_doc_ids.remove(doc_id)
-        else:
-            self.unmasked_doc_ids.add(doc_id)
-        self.render()
-
-    def handle_copy(self, val: str, btn: ft.IconButton):
-        copy_to_windows_clipboard(val)
-        restore_icon = ft.Icons.COPY_ALL_ROUNDED if btn.icon_size == 18 else ft.Icons.COPY
-        btn.icon = ft.Icons.CHECK
-        btn.icon_color = ft.Colors.GREEN_ACCENT
+    def _update(self):
         if self.app_page:
             self.app_page.update()
 
-        def _restore():
+    def _changed(self, message: str = ""):
+        self.feedback = message
+        self.render()
+        update_desktop_wallpaper()
+
+    # ------------------------------------------------------------ render
+    def render(self):
+        created = db.sync_renewal_quests()
+        if created and not self.feedback:
+            self.feedback = f"{len(created)} renewal quest{'s' if len(created) != 1 else ''} added to your Quest Log."
+        docs = db.get_tracked_docs()
+        attention = [d for d in docs if d["status"] != "ok"]
+        good = [d for d in docs if d["status"] == "ok"]
+        controls = [self._header()]
+        legacy = db.count_legacy_documents()
+        if legacy:
+            controls.append(self._legacy_banner(legacy))
+        if self.feedback:
+            controls.append(ft.Container(content=ft.Text(self.feedback, color=ft.Colors.GREEN_ACCENT, size=13),
+                                         padding=ft.Padding.symmetric(horizontal=20)))
+            self.feedback = ""
+        if not docs:
+            controls.append(ft.Container(content=ft.Column([
+                ft.Icon(ft.Icons.FOLDER_OPEN_OUTLINED, size=48, color=ft.Colors.GREY_600),
+                ft.Text("Track what expires: CNH, passport, IPVA, insurance…", color=ft.Colors.GREY_400),
+                ft.Text("Only a name, type and expiration date are needed.", size=12, color=ft.Colors.GREY_500),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8), alignment=ft.Alignment.CENTER,
+                padding=40))
+        if attention:
+            controls.append(self._group("NEEDS ATTENTION", attention, ft.Colors.AMBER_ACCENT))
+        if good:
+            controls.append(self._group("ALL GOOD", good, ft.Colors.GREEN_ACCENT))
+        self.controls = controls
+        self._update()
+
+    def _header(self):
+        pin = db.has_doc_pin()
+        lock_btn = ft.IconButton(
+            ft.Icons.LOCK_OPEN if LOCK.unlocked() else ft.Icons.LOCK_OUTLINE,
+            icon_color=ft.Colors.GREEN_ACCENT if LOCK.unlocked() else ft.Colors.AMBER_ACCENT,
+            tooltip=("Lock now" if LOCK.unlocked() else "Unlock numbers & notes") if pin else "No PIN set",
+            on_click=lambda e: self._toggle_lock(), visible=pin)
+        return ft.Container(content=ft.Row([
+            ft.Icon(ft.Icons.FOLDER_SHARED, color=ft.Colors.CYAN_ACCENT, size=28),
+            ft.Text("Documents", size=22, weight=ft.FontWeight.BOLD, expand=True),
+            lock_btn,
+            ft.IconButton(ft.Icons.SETTINGS_OUTLINED, tooltip="PIN & renewal quests", on_click=lambda e: self._settings()),
+            ft.Button("Add document", icon=ft.Icons.ADD, on_click=lambda e: self.open_editor()),
+        ], spacing=8), padding=ft.Padding.only(left=20, right=20, top=18))
+
+    def _toggle_lock(self):
+        if LOCK.unlocked():
+            LOCK.lock()
+            self.revealed.clear()
+            self.render()
+        else:
+            ask_pin(self.app_page, self._unlocked)
+
+    def _unlocked(self):
+        """Redraws with numbers available and re-hides them when the unlock window ends."""
+        self.render()
+        timer = threading.Timer(UNLOCK_MINUTES * 60 + 1, self._relock_if_expired)
+        timer.daemon = True
+        timer.start()
+
+    def _relock_if_expired(self):
+        if db.has_doc_pin() and not LOCK.unlocked():
+            self.revealed.clear()
             try:
-                btn.icon = restore_icon
-                btn.icon_color = ft.Colors.CYAN_ACCENT
-                if self.app_page:
-                    self.app_page.update()
+                self.render()
             except Exception:
                 pass
 
-        for delay, fn, args in ((2.0, _restore, ()), (30.0, clear_clipboard_if_unchanged, (val,))):
+    def _group(self, title, docs, color):
+        return ft.Container(content=ft.Column(
+            [ft.Text(f"{title} ({len(docs)})", size=11, weight=ft.FontWeight.BOLD, color=color),
+             *[self._card(d) for d in docs]], spacing=8), padding=ft.Padding.symmetric(horizontal=20))
+
+    def _card(self, doc):
+        cicon, ccolor = CATEGORY_ICONS.get(doc["category"], CATEGORY_ICONS["Other"])
+        scolor, sicon = STATUS_STYLE[doc["status"]]
+        badges = [ft.Container(content=ft.Text(doc["doc_type"], size=11, color=ccolor, weight=ft.FontWeight.BOLD),
+                               border=ft.Border.all(1, ccolor), border_radius=4,
+                               padding=ft.Padding.symmetric(horizontal=6, vertical=1))]
+        if doc["annual"]:
+            badges.append(ft.Container(content=ft.Text("Yearly", size=11, color=ft.Colors.CYAN_200),
+                                       border=ft.Border.all(1, ft.Colors.CYAN_200), border_radius=4,
+                                       padding=ft.Padding.symmetric(horizontal=6, vertical=1)))
+        info = [ft.Text(f"Reminder from {date.fromisoformat(doc['warn_start']):%d/%m/%Y} "
+                        f"({warn_label(doc['warn_days'])})", size=11, color=ft.Colors.GREY_500)]
+        if doc["quest_id"] and doc["status"] != "ok":
+            info.append(ft.Row([ft.Icon(ft.Icons.MAP_OUTLINED, size=13, color=ft.Colors.AMBER_200),
+                                ft.Text("Renewal quest in your Quest Log", size=11, color=ft.Colors.AMBER_200)],
+                               spacing=4))
+        if doc["has_number"]:
+            info.append(self._number_row(doc))
+        if doc["has_notes"]:
+            info.append(self._notes_row(doc))
+
+        renew_btn = ft.Button("Renewed", icon=ft.Icons.AUTORENEW,
+                              on_click=lambda e, d=doc: open_renew_dialog(self.app_page, d, self._renewed),
+                              bgcolor=ft.Colors.GREEN_ACCENT if doc["status"] != "ok" else None,
+                              color=ft.Colors.BLACK if doc["status"] != "ok" else None)
+        history = db.get_doc_renewals(doc["id"])
+        actions = [renew_btn]
+        if history:
+            actions.append(ft.IconButton(ft.Icons.HISTORY, icon_size=18, tooltip="Renewal history",
+                                         on_click=lambda e, d=doc, h=history: self._history(d, h)))
+        actions += [
+            ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=18, tooltip="Edit",
+                          on_click=lambda e, d=doc: self.open_editor(d)),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=ft.Colors.RED_300, tooltip="Delete",
+                          on_click=lambda e, d=doc: confirm_action(
+                              self.app_page, "Delete document?",
+                              f"'{d['title']}' and its renewal history will be removed permanently.",
+                              lambda: (db.delete_tracked_doc(d["id"]), self._changed()))),
+        ]
+        return ft.Container(
+            content=ft.Row([
+                ft.Icon(cicon, color=ccolor, size=26),
+                ft.Column([
+                    ft.Row([ft.Text(doc["title"], size=15, weight=ft.FontWeight.BOLD), *badges], spacing=8, wrap=True),
+                    ft.Row([ft.Icon(sicon, color=scolor, size=16),
+                            ft.Text(status_text(doc), color=scolor, weight=ft.FontWeight.BOLD, size=13)], spacing=6),
+                    *info,
+                ], spacing=4, expand=True),
+                ft.Row(actions, spacing=0),
+            ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.START),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=10, padding=14,
+            border=ft.Border.only(left=ft.BorderSide(4, scolor)),
+        )
+
+    def _number_row(self, doc):
+        if not LOCK.unlocked():
+            return ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE, size=14, color=ft.Colors.GREY_500),
+                           ft.Text("Number saved • unlock to view", size=12, color=ft.Colors.GREY_500)], spacing=6)
+        number, _ = db.get_doc_secrets(doc["id"])
+        shown = doc["id"] in self.revealed
+        copy_btn = ft.IconButton(ft.Icons.COPY, icon_size=16, tooltip=f"Copy (clipboard clears in {CLIPBOARD_CLEAR_SECONDS}s)")
+        copy_btn.on_click = lambda e, n=number, b=copy_btn: self._copy(n, b)
+        return ft.Row([
+            ft.Text(number if shown else mask_number(number), size=13, font_family="Consolas", selectable=shown),
+            ft.IconButton(ft.Icons.VISIBILITY_OFF if shown else ft.Icons.VISIBILITY, icon_size=16,
+                          tooltip="Hide" if shown else "Show", on_click=lambda e, i=doc["id"]: self._toggle_reveal(i)),
+            copy_btn,
+        ], spacing=0)
+
+    def _notes_row(self, doc):
+        if not LOCK.unlocked():
+            return ft.Text("Notes saved • unlock to view", size=12, color=ft.Colors.GREY_500)
+        _, notes = db.get_doc_secrets(doc["id"])
+        return ft.Text(notes, size=12, color=ft.Colors.GREY_300, selectable=True)
+
+    def _toggle_reveal(self, doc_id):
+        self.revealed.symmetric_difference_update({doc_id})
+        self.render()
+
+    def _copy(self, number, btn):
+        copy_to_windows_clipboard(number)
+        btn.icon, btn.icon_color = ft.Icons.CHECK, ft.Colors.GREEN_ACCENT
+        self._update()
+
+        def restore():
+            btn.icon, btn.icon_color = ft.Icons.COPY, None
+            try:
+                self._update()
+            except Exception:
+                pass
+
+        for delay, fn, args in ((2.0, restore, ()), (CLIPBOARD_CLEAR_SECONDS, clear_clipboard_if_unchanged, (number,))):
             t = threading.Timer(delay, fn, args=args)
             t.daemon = True
             t.start()
 
-    def delete_doc(self, doc_id: int):
-        db.delete_document(doc_id)
-        if self.editing_doc_id == doc_id:
-            self.show_editor = False
-        self.render()
-        update_desktop_wallpaper()
+    def _renewed(self, xp):
+        self._changed(f"Renewed! +{xp:g} XP from the renewal quest 🎉" if xp else "Renewed — reminders reset.")
 
-    def open_create_studio(self, e=None):
-        self.show_editor = True
-        self.editing_doc_id = None
-        self.custom_fields = []
+    def _history(self, doc, history):
+        rows = [ft.Text(f"{date.fromisoformat(h['renewed_on']):%d/%m/%Y}: "
+                        f"{date.fromisoformat(h['old_expiration']):%d/%m/%Y} → "
+                        f"{date.fromisoformat(h['new_expiration']):%d/%m/%Y}", size=13) for h in history]
+        self.app_page.show_dialog(ft.AlertDialog(
+            title=ft.Text(f"Renewals: {doc['title']}", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=380, content=ft.Column(rows, spacing=6, tight=True)),
+            actions=[ft.TextButton("Close", on_click=lambda e: self.app_page.pop_dialog())]))
 
-        self.cat_dropdown.value = "Identity"
-        self.type_dropdown.options = [ft.DropdownOption(t) for t in DOC_TYPE_PRESETS["Identity"]]
-        self.type_dropdown.value = "CPF"
-        self.title_input.value = ""
-        self.title_input.error_text = None
-        self.number_input.value = ""
-        self.issue_input.value = ""
-        self.expiration_input.value = ""
-        self.notes_input.value = ""
-        self.render()
-
-    def open_edit_studio(self, d_data):
-        self.show_editor = True
-        self.editing_doc_id = d_data[0]
-
-        self.cat_dropdown.value = d_data[1]
-        types = DOC_TYPE_PRESETS.get(d_data[1], ["Outro"])
-        self.type_dropdown.options = [ft.DropdownOption(t) for t in types]
-        self.type_dropdown.value = d_data[2]
-        self.title_input.value = d_data[3]
-        self.title_input.error_text = None
-        self.number_input.value = d_data[4] or ""
-        self.issue_input.value = format_to_dd_mm_yy(d_data[6]) if d_data[6] else ""
-        self.expiration_input.value = format_to_dd_mm_yy(d_data[7]) if d_data[7] else ""
-        self.notes_input.value = d_data[8] or ""
-
-        try:
-            self.custom_fields = json.loads(d_data[9]) if (len(d_data) > 9 and d_data[9]) else []
-        except Exception:
-            self.custom_fields = []
-
-        self.render()
-
-    def cancel_studio(self, e=None):
-        self.show_editor = False
-        self.editing_doc_id = None
-        self.render()
-
-    def add_custom_field(self, e=None):
-        self.custom_fields.append({"label": "", "value": ""})
-        self.render()
-
-    def remove_custom_field(self, idx: int):
-        if 0 <= idx < len(self.custom_fields):
-            self.custom_fields.pop(idx)
-            self.render()
-
-    def save_studio(self, e=None):
-        title = self.title_input.value.strip()
-        doc_num = self.number_input.value.strip()
-
-        if not title:
-            self.title_input.error_text = "Title / Name is required"
-            if self.app_page:
-                self.app_page.update()
+    # ------------------------------------------------------------ editor
+    def open_editor(self, doc=None):
+        if doc and (doc["has_number"] or doc["has_notes"]) and not LOCK.unlocked():
+            ask_pin(self.app_page, lambda: (self._unlocked(), self.open_editor(doc)), title="Unlock to edit")
             return
-        else:
-            self.title_input.error_text = None
+        editing = doc is not None
+        number, notes = db.get_doc_secrets(doc["id"]) if editing else ("", "")
+        first_type = db.DOC_TYPES["Identity"][1][0]
+        type_dd = ft.Dropdown(label="Type", value=doc["doc_type"] if editing else first_type, dense=True,
+                              options=type_options(), menu_height=360, expand=True)
+        title_f = ft.TextField(label="Name (e.g. My CNH, Honda Civic IPVA)", value=doc["title"] if editing else "",
+                               dense=True, autofocus=not editing)
+        exp_f = ft.TextField(label="Expiration date (DD/MM/YYYY)", dense=True, expand=True,
+                             value=f"{date.fromisoformat(doc['expiration_date']):%d/%m/%Y}" if editing else "")
+        warn = doc["warn_days"] if editing else db.doc_type_defaults(first_type)[1]
+        warn_dd = ft.Dropdown(label="Remind me", value=str(warn), dense=True, width=210,
+                              options=[ft.DropdownOption(key=str(d), text=warn_label(d))
+                                       for d in sorted(set(WARN_OPTIONS + [warn]))])
+        annual_cb = ft.Checkbox(label="Renews every year (IPVA, licensing, IPTU, insurance…)",
+                                value=doc["annual"] if editing else db.doc_type_defaults(first_type)[2])
+        number_f = ft.TextField(label="Number (optional — encrypted)", value=number, dense=True,
+                                password=True, can_reveal_password=True)
+        notes_f = ft.TextField(label="Notes (optional — encrypted)", value=notes, dense=True, multiline=True,
+                               min_lines=1, max_lines=4)
+        error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
-        # Clean custom fields
-        clean_fields = [
-            {"label": f["label"].strip(), "value": f["value"].strip()} 
-            for f in self.custom_fields 
-            if f["label"].strip() or f["value"].strip()
-        ]
-        extra_fields_json = json.dumps(clean_fields)
+        def on_type(e):
+            _, w, ann = db.doc_type_defaults(type_dd.value)
+            if str(w) not in [o.key for o in warn_dd.options]:
+                warn_dd.options = [ft.DropdownOption(key=str(d), text=warn_label(d))
+                                   for d in sorted(set(WARN_OPTIONS + [w]))]
+            warn_dd.value, annual_cb.value = str(w), ann
+            if not (title_f.value or "").strip():
+                title_f.value = type_dd.value
+            self._update()
 
-        # Standardize dates
-        issue_raw = self.issue_input.value.strip()
-        exp_raw = self.expiration_input.value.strip()
-        issue_d = parse_flexible_date(issue_raw) if issue_raw else None
-        exp_d = parse_flexible_date(exp_raw) if exp_raw else None
-        self.issue_input.error_text = "Invalid date (use DD-MM-YY)" if issue_raw and not issue_d else None
-        self.expiration_input.error_text = "Invalid date (use DD-MM-YY)" if exp_raw and not exp_d else None
-        if self.issue_input.error_text or self.expiration_input.error_text:
-            if self.app_page:
-                self.app_page.update()
-            return
-        # stored as ISO (YYYY-MM-DD); displayed as DD-MM-YY
-        issue_clean = issue_d.isoformat() if issue_d else ""
-        exp_clean = exp_d.isoformat() if exp_d else ""
+        type_dd.on_select = on_type
 
-        if self.editing_doc_id is not None:
-            db.update_document(
-                doc_id=self.editing_doc_id,
-                category=self.cat_dropdown.value,
-                doc_type=self.type_dropdown.value,
-                title=title,
-                doc_number=doc_num,
-                issue_date=issue_clean,
-                expiration_date=exp_clean,
-                notes=self.notes_input.value.strip(),
-                extra_fields=extra_fields_json
-            )
-        else:
-            db.add_document(
-                category=self.cat_dropdown.value,
-                doc_type=self.type_dropdown.value,
-                title=title,
-                doc_number=doc_num,
-                secondary_info="",
-                issue_date=issue_clean,
-                expiration_date=exp_clean,
-                notes=self.notes_input.value.strip(),
-                extra_fields=extra_fields_json
-            )
+        def save(e=None):
+            title = (title_f.value or "").strip()
+            exp = db.parse_flexible_date(exp_f.value or "")
+            if not title or not exp:
+                error.value = "A name and a valid expiration date (DD/MM/YYYY) are required."
+                self._update()
+                return
+            fields = dict(title=title, doc_type=type_dd.value, category=db.doc_type_defaults(type_dd.value)[0],
+                          expiration_date=exp.isoformat(), warn_days=int(warn_dd.value), annual=bool(annual_cb.value),
+                          number=number_f.value or "", notes=notes_f.value or "")
+            if editing:
+                if fields["expiration_date"] == doc["expiration_date"]:
+                    fields.pop("expiration_date")  # keep reminders already sent
+                db.update_tracked_doc(doc["id"], **fields)
+            else:
+                db.add_tracked_doc(fields.pop("title"), fields.pop("doc_type"), fields.pop("expiration_date"), **fields)
+            self.app_page.pop_dialog()
+            self._changed("Saved.")
 
-        self.show_editor = False
-        self.editing_doc_id = None
-        self.render()
-        update_desktop_wallpaper()
+        self.app_page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("Edit document" if editing else "Add document", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=520, content=ft.Column([
+                ft.Row([type_dd]), title_f, ft.Row([exp_f, warn_dd], spacing=10), annual_cb,
+                ft.Divider(height=1, color=ft.Colors.GREY_800),
+                ft.Text("Optional — only if you really need it here:", size=12, color=ft.Colors.GREY_400),
+                number_f, notes_f, error,
+            ], spacing=12, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
+                     ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]))
 
-    def render(self):
-        self.controls.clear()
-        docs = db.get_documents(self.current_filter)
-        expiring = db.get_expiring_documents(days_ahead=60)
-        today = date.today()
+    # ------------------------------------------------------------ settings (PIN, renewal quests)
+    def _settings(self):
+        page = self.app_page
+        has_pin = db.has_doc_pin()
+        quests_cb = ft.Checkbox(label="Create a renewal quest when a document needs attention",
+                                value=db.renewal_quests_enabled(),
+                                on_change=lambda e: db.set_hud_setting(db.SETTING_DOC_QUESTS,
+                                                                       "true" if e.control.value else "false"))
+        current_f = ft.TextField(label="Current PIN", password=True, dense=True, visible=has_pin,
+                                 keyboard_type=ft.KeyboardType.NUMBER)
+        new_f = ft.TextField(label="New PIN (4-8 digits)", password=True, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+        confirm_f = ft.TextField(label="Repeat new PIN", password=True, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+        msg = ft.Text("", size=12)
 
-        # 1. Header Banner
-        urgent_count = sum(1 for _, _, _, days in expiring if days <= 30)
-        warning_count = len(expiring) - urgent_count
+        def show(text, ok):
+            msg.value, msg.color = text, ft.Colors.GREEN_ACCENT if ok else ft.Colors.RED_ACCENT
+            page.update()
 
-        stats_items = [
+        def save_pin(e):
+            if has_pin and not db.check_doc_pin(current_f.value or ""):
+                return show("Current PIN is wrong.", False)
+            pin = (new_f.value or "").strip()
+            if not (pin.isdigit() and 4 <= len(pin) <= 8):
+                return show("The PIN must have 4 to 8 digits.", False)
+            if pin != (confirm_f.value or "").strip():
+                return show("The two PINs don't match.", False)
+            db.set_doc_pin(pin)
+            LOCK.lock()
+            page.pop_dialog()
+            self._changed("PIN saved — numbers and notes are now locked.")
+
+        def remove_pin(e):
+            if not db.check_doc_pin(current_f.value or ""):
+                return show("Type the current PIN to remove it.", False)
+            db.remove_doc_pin()
+            page.pop_dialog()
+            self._changed("PIN removed.")
+
+        def forgot(e):
+            page.pop_dialog()
+            confirm_action(page, "Forgot the PIN?",
+                           "The PIN is removed AND every saved number and note is erased (names and dates stay). "
+                           "This can't be undone.",
+                           lambda: (db.reset_doc_pin_and_wipe_secrets(), LOCK.lock(),
+                                    self._changed("PIN reset — saved numbers and notes were erased.")),
+                           confirm_label="Erase and reset")
+
+        pin_actions = [ft.Button("Change PIN" if has_pin else "Set PIN", icon=ft.Icons.PIN, on_click=save_pin)]
+        if has_pin:
+            pin_actions += [ft.TextButton("Remove PIN", on_click=remove_pin),
+                            ft.TextButton("Forgot PIN", on_click=forgot)]
+        page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("Documents settings", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=460, content=ft.Column([
+                quests_cb,
+                ft.Divider(height=1, color=ft.Colors.GREY_800),
+                ft.Text("PIN lock", weight=ft.FontWeight.BOLD),
+                ft.Text("Hides numbers and notes until you type the PIN (they are already encrypted on disk; the PIN "
+                        "keeps them off the screen).", size=12, color=ft.Colors.GREY_400),
+                current_f, new_f, confirm_f, ft.Row(pin_actions, spacing=6, wrap=True), msg,
+            ], spacing=10, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+            actions=[ft.TextButton("Close", on_click=lambda e: (page.pop_dialog(), self.render()))]))
+
+    # ------------------------------------------------------------ old format
+    def _legacy_banner(self, count):
+        def run(import_safe):
+            n = db.remove_legacy_documents(import_safe_fields=import_safe)
+            self._changed(f"Old documents removed — {n} imported (name, type and date only)." if import_safe
+                          else "Old documents deleted.")
+
+        return ft.Container(content=ft.Column([
+            ft.Row([ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.AMBER_ACCENT),
+                    ft.Text(f"{count} document{'s' if count != 1 else ''} from the old format (with numbers and extra "
+                            "fields) are still stored.", weight=ft.FontWeight.BOLD, expand=True)]),
+            ft.Text("Import keeps only the name, type and expiration date; the old rows (numbers included) are then "
+                    "deleted for good. Daily backups keep a copy for up to 14 days.", size=12, color=ft.Colors.GREY_400),
             ft.Row([
-                ft.Icon(ft.Icons.FOLDER_SPECIAL, color=ft.Colors.CYAN_ACCENT, size=30),
-                ft.Column([
-                    ft.Text("Personal Documents Vault", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text(f"{len(docs)} documents registered securely in AppData", size=12, color=ft.Colors.GREY_400)
-                ], spacing=2)
-            ])
-        ]
-
-        if expiring:
-            alert_color = ft.Colors.RED_ACCENT if urgent_count > 0 else ft.Colors.AMBER_ACCENT
-            alert_txt = f"{urgent_count} Urgent (<30d)" if urgent_count > 0 else f"{warning_count} Expiring soon"
-            stats_items.append(
-                ft.Container(
-                    content=ft.Row([
-                        ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=alert_color, size=18),
-                        ft.Text(f"Attention: {alert_txt}", color=alert_color, size=12, weight=ft.FontWeight.BOLD)
-                    ], spacing=6),
-                    bgcolor=ft.Colors.with_opacity(0.12, alert_color),
-                    border=ft.Border.all(1, alert_color),
-                    border_radius=8,
-                    padding=ft.Padding.symmetric(horizontal=10, vertical=6)
-                )
-            )
-
-        header_banner = ft.Container(
-            content=ft.Row(stats_items, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-            border_radius=12,
-            padding=15,
-            margin=ft.Margin.symmetric(horizontal=20, vertical=10)
-        )
-        self.controls.append(header_banner)
-
-        # 2. Filter Bar & Add Button
-        filter_buttons = []
-        for cat in CATEGORIES:
-            is_active = (cat == self.current_filter)
-            filter_buttons.append(
-                ft.Button(
-                    content=cat,
-                    style=ft.ButtonStyle(
-                        bgcolor=ft.Colors.CYAN_ACCENT if is_active else ft.Colors.SURFACE_CONTAINER_HIGH,
-                        color=ft.Colors.BLACK if is_active else ft.Colors.WHITE
-                    ),
-                    on_click=lambda e, c=cat: self.set_filter(c)
-                )
-            )
-
-        action_bar = ft.Container(
-            content=ft.Row([
-                ft.Row(filter_buttons, spacing=8),
-                ft.Button(
-                    content="Add Document",
-                    icon=ft.Icons.ADD_CARD,
-                    on_click=self.open_create_studio
-                )
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            padding=ft.Padding.symmetric(horizontal=20, vertical=5)
-        )
-        self.controls.append(action_bar)
-
-        # 3. INLINE DOCUMENT STUDIO
-        if self.show_editor:
-            custom_field_rows = []
-            for i, field_data in enumerate(self.custom_fields):
-                lbl_field = ft.TextField(
-                    label="Field Title / Label",
-                    hint_text="e.g. Placa, Renavam, SSP/SP...",
-                    value=field_data["label"],
-                    width=260,
-                    dense=True,
-                    on_change=lambda e, idx=i: self.custom_fields[idx].update({"label": e.control.value})
-                )
-                val_field = ft.TextField(
-                    label="Value",
-                    hint_text="e.g. ABC-1234, 123456789...",
-                    value=field_data["value"],
-                    expand=True,
-                    dense=True,
-                    on_change=lambda e, idx=i: self.custom_fields[idx].update({"value": e.control.value})
-                )
-                del_btn = ft.IconButton(
-                    icon=ft.Icons.DELETE_OUTLINE,
-                    icon_color=ft.Colors.RED_400,
-                    tooltip="Remove Field",
-                    on_click=lambda e, idx=i: self.remove_custom_field(idx)
-                )
-                custom_field_rows.append(ft.Row([lbl_field, val_field, del_btn], spacing=10))
-
-            editor_card = ft.Container(
-                content=ft.Column([
-                    ft.Row([
-                        ft.Row([
-                            ft.Icon(ft.Icons.EDIT_DOCUMENT if self.editing_doc_id else ft.Icons.ADD_CARD, color=ft.Colors.CYAN_ACCENT),
-                            ft.Text("Edit Document" if self.editing_doc_id else "Add New Document", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT)
-                        ], spacing=8),
-                        ft.IconButton(ft.Icons.CLOSE, icon_color=ft.Colors.GREY_400, on_click=self.cancel_studio)
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Divider(color=ft.Colors.GREY_800, height=1),
-                    ft.Row([self.cat_dropdown, self.type_dropdown, self.title_input], spacing=10),
-                    self.number_input,
-                    ft.Row([self.issue_input, self.expiration_input], spacing=10),
-                    ft.Divider(color=ft.Colors.GREY_800, height=1),
-                    ft.Row([
-                        ft.Text("Extra Information & Custom Fields (Optional):", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY_300),
-                        ft.Button(content="Add Field", icon=ft.Icons.ADD, on_click=self.add_custom_field)
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Column(custom_field_rows, spacing=8) if custom_field_rows else ft.Text("No extra fields added. Click '+ Add Field' to store Placa, Renavam, Pix, etc.", color=ft.Colors.GREY_500, size=12, italic=True),
-                    ft.Divider(color=ft.Colors.GREY_800, height=1),
-                    self.notes_input,
-                    ft.Row([
-                        ft.Button(content="Save Document", icon=ft.Icons.CHECK, on_click=self.save_studio),
-                        ft.Button(content="Cancel", on_click=self.cancel_studio)
-                    ], spacing=10)
-                ], spacing=10),
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                border=ft.Border.all(1, ft.Colors.CYAN_ACCENT),
-                border_radius=12,
-                padding=20,
-                margin=ft.Margin.symmetric(horizontal=20, vertical=10)
-            )
-            self.controls.append(editor_card)
-
-        # 4. Document Cards List
-        if not docs:
-            self.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=48, color=ft.Colors.GREY_600),
-                        ft.Text(f"No documents registered in '{self.current_filter}'. Click 'Add Document' above!", color=ft.Colors.GREY_500, size=14)
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-                    alignment=ft.Alignment.CENTER,
-                    padding=60
-                )
-            )
-
-        cards_column = ft.Column(spacing=8)
-
-        for d in docs:
-            doc_id = d[0]
-            category = d[1]
-            doc_type = d[2]
-            title = d[3]
-            doc_num = d[4] or ""
-            issue_d = d[6] or ""
-            exp_d = d[7] or ""
-            notes = d[8] or ""
-            extra_fields_raw = d[9] if len(d) > 9 else "[]"
-
-            is_unmasked = (doc_id in self.unmasked_doc_ids)
-            display_num = doc_num if is_unmasked else mask_number(doc_num)
-            cat_color = CATEGORY_COLORS.get(category, ft.Colors.GREY_400)
-
-            # Expiration Status Badge (dd-mm-yy aware)
-            status_chip = None
-            if exp_d and exp_d.strip():
-                exp_date = parse_flexible_date(exp_d)
-                if exp_date:
-                    delta_days = (exp_date - today).days
-                    is_passport = ("passaporte" in doc_type.lower() or "passport" in doc_type.lower())
-
-                    if delta_days < 0:
-                        status_chip = ft.Container(
-                            content=ft.Text(f"Expired {abs(delta_days)}d ago", size=11, color=ft.Colors.RED_ACCENT, weight=ft.FontWeight.BOLD),
-                            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.RED),
-                            border_radius=4,
-                            padding=ft.Padding.symmetric(horizontal=6, vertical=2)
-                        )
-                    elif delta_days <= 30:
-                        status_chip = ft.Container(
-                            content=ft.Text(f"Expires in {delta_days}d!", size=11, color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD),
-                            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.RED),
-                            border_radius=4,
-                            padding=ft.Padding.symmetric(horizontal=6, vertical=2)
-                        )
-                    elif delta_days <= 60 or (is_passport and delta_days <= 180):
-                        label = f"Passport: {delta_days}d left (<6m)" if is_passport and delta_days <= 180 else f"Expires in {delta_days}d"
-                        status_chip = ft.Container(
-                            content=ft.Text(label, size=11, color=ft.Colors.AMBER_ACCENT, weight=ft.FontWeight.BOLD),
-                            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.AMBER),
-                            border_radius=4,
-                            padding=ft.Padding.symmetric(horizontal=6, vertical=2)
-                        )
-                    else:
-                        status_chip = ft.Container(
-                            content=ft.Text(f"Valid ({delta_days}d left)", size=11, color=ft.Colors.GREEN_ACCENT),
-                            bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.GREEN),
-                            border_radius=4,
-                            padding=ft.Padding.symmetric(horizontal=6, vertical=2)
-                        )
-
-            # Main Number Row
-            number_row_controls = []
-            if doc_num:
-                copy_btn = ft.IconButton(icon=ft.Icons.COPY_ALL_ROUNDED, icon_color=ft.Colors.CYAN_ACCENT, icon_size=18, tooltip="Copy Main Number")
-                copy_btn.on_click = lambda e, val=doc_num, b=copy_btn: self.handle_copy(val, b)
-
-                mask_btn = ft.IconButton(
-                    icon=ft.Icons.VISIBILITY if is_unmasked else ft.Icons.VISIBILITY_OFF,
-                    icon_color=ft.Colors.GREY_400,
-                    icon_size=18,
-                    tooltip="Toggle Privacy Mask",
-                    on_click=lambda e, did=doc_id: self.toggle_mask(did)
-                )
-                number_row_controls.extend([
-                    ft.Text(display_num, size=16, weight=ft.FontWeight.W_500, font_family="Consolas"),
-                    copy_btn,
-                    mask_btn
-                ])
-
-            # Dates row formatted as dd-mm-yy
-            details_items = []
-            if issue_d:
-                details_items.append(ft.Text(f"Emitted: {format_to_dd_mm_yy(issue_d)}", size=11, color=ft.Colors.GREY_500))
-            if exp_d:
-                details_items.append(ft.Text(f"Expires: {format_to_dd_mm_yy(exp_d)}", size=11, color=ft.Colors.GREY_500))
-
-            if details_items:
-                if number_row_controls:
-                    number_row_controls.append(ft.VerticalDivider(width=20))
-                number_row_controls.extend(details_items)
-
-            # Custom Fields with Copy Buttons
-            custom_chips = []
-            try:
-                fields_list = json.loads(extra_fields_raw) if extra_fields_raw else []
-                for field in fields_list:
-                    lbl = field.get("label", "")
-                    val = field.get("value", "")
-                    if lbl or val:
-                        field_copy_btn = ft.IconButton(icon=ft.Icons.COPY, icon_size=14, icon_color=ft.Colors.CYAN_ACCENT, tooltip=f"Copy {lbl}")
-                        field_copy_btn.on_click = lambda e, v=val, b=field_copy_btn: self.handle_copy(v, b)
-
-                        custom_chips.append(
-                            ft.Container(
-                                content=ft.Row([
-                                    ft.Text(f"{lbl}:", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY_400),
-                                    ft.Text(val, size=12, weight=ft.FontWeight.W_500, font_family="Consolas"),
-                                    field_copy_btn
-                                ], spacing=4, tight=True),
-                                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
-                                border=ft.Border.all(1, ft.Colors.GREY_800),
-                                border_radius=6,
-                                padding=ft.Padding.only(left=8, right=4, top=2, bottom=2)
-                            )
-                        )
-            except Exception:
-                pass
-
-            card_content = [
-                ft.Row([
-                    ft.Row([
-                        ft.Container(
-                            content=ft.Text(doc_type, size=11, weight=ft.FontWeight.BOLD, color=cat_color),
-                            border=ft.Border.all(1, cat_color),
-                            border_radius=4,
-                            padding=ft.Padding.symmetric(horizontal=6, vertical=2)
-                        ),
-                        ft.Text(title, size=15, weight=ft.FontWeight.BOLD),
-                        status_chip if status_chip else ft.Container()
-                    ], spacing=10),
-                    ft.Row([
-                        ft.IconButton(
-                            icon=ft.Icons.EDIT_OUTLINED,
-                            icon_size=18,
-                            icon_color=ft.Colors.GREY_400,
-                            tooltip="Edit Document",
-                            on_click=lambda e, d_data=d: self.open_edit_studio(d_data)
-                        ),
-                        ft.IconButton(
-                            icon=ft.Icons.DELETE_OUTLINE,
-                            icon_size=18,
-                            icon_color=ft.Colors.RED_400,
-                            tooltip="Delete Document",
-                            on_click=lambda e, did=doc_id, t=title: confirm_action(
-                                self.app_page, "Delete document?", f"'{t}' will be removed from the vault.",
-                                lambda: self.delete_doc(did))
-                        )
-                    ], spacing=0)
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-            ]
-
-            if number_row_controls:
-                card_content.append(ft.Row(number_row_controls, spacing=5))
-            if custom_chips:
-                card_content.append(ft.Row(custom_chips, spacing=8, wrap=True))
-            if notes:
-                card_content.append(ft.Text(notes, size=12, color=ft.Colors.GREY_400, italic=True))
-
-            card = ft.Container(
-                content=ft.Column(card_content, spacing=6),
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                border_radius=8,
-                padding=12,
-                margin=ft.Margin.symmetric(horizontal=20, vertical=3)
-            )
-            cards_column.controls.append(card)
-
-        self.controls.append(cards_column)
-
-        if self.app_page:
-            self.app_page.update()
+                ft.Button("Import without numbers", icon=ft.Icons.DOWNLOAD_DONE, on_click=lambda e: confirm_action(
+                    self.app_page, "Import and delete old documents?",
+                    "Names, types and expiration dates are imported; numbers, notes and extra fields are deleted.",
+                    lambda: run(True), confirm_label="Import")),
+                ft.TextButton("Delete all", icon=ft.Icons.DELETE_FOREVER, icon_color=ft.Colors.RED_300,
+                              on_click=lambda e: confirm_action(
+                                  self.app_page, "Delete old documents?",
+                                  f"All {count} old-format documents are deleted permanently.", lambda: run(False),
+                                  confirm_label="Delete all")),
+            ], spacing=8),
+        ], spacing=8), bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.AMBER), border_radius=10, padding=14,
+            margin=ft.Margin.symmetric(horizontal=20))

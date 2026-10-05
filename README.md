@@ -53,7 +53,12 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
   * Events with start time, duration or all-day, color, notes and a per-event reminder (tray notification), plus an alarm dialog at start time.
   * Repeats: daily, weekdays, weekly, monthly, yearly, with an optional end date. Edit or delete just one occurrence, this and following, or the whole series.
   * Overlap warnings while scheduling; mark events done for +10 XP.
-* **Documents Vault:** Personal documents with masked numbers, auto-clearing clipboard copy, expiration alerts and **field-level encryption** (key stored in the Windows Credential Manager — back it up with `python secure.py show-key`).
+* **Documents:** a lean expiration tracker — only a name, type and expiration date are needed.
+  * Brazilian presets (CNH, RG / CIN, Passaporte, CRLV, IPVA, IPTU, insurance…) with a sensible reminder window each (e.g. passport 6 months, CNH 2 months), editable per document.
+  * Status at a glance (valid / expires soon / expired), shown in the **Calendar**, on the wallpaper and as **tray reminders** (when the window starts, 7 days before, on the day).
+  * **Renewal quests:** a document entering its window adds a "Renew …" quest to the Quest Log; pressing **Renewed** sets the new date, keeps the history and completes the quest (+XP).
+  * **Yearly items** (IPVA, licensing, IPTU, insurance) suggest next year's date automatically.
+  * The number and notes are **optional**, encrypted (key in the Windows Credential Manager — back it up with `python secure.py show-key`) and can be hidden behind a **PIN**.
 
 ### 🖼️ 5. Desktop Wallpaper HUD
 * Renders your level, streak, today's score, quests, studies (next step and reviews due), upcoming events and document alerts onto your wallpaper (position, accent color and widgets are configurable).
@@ -83,7 +88,7 @@ Daily_Personal_Gamification/
 ├── todo_view.py        # Quest log: steps, quest log, targets, repeats, Hall of Fame, AI planner
 ├── study_view.py       # Study chapters: journal, wrap-up, reviews, AI settings
 ├── calendar_view.py    # Calendar and events
-├── documents_view.py   # Personal documents vault
+├── documents_view.py   # Document expiration tracker, renewals, PIN lock
 ├── wallpaper.py        # Wallpaper HUD renderer
 ├── wallpaper_view.py   # HUD settings screen
 ├── ai_gemini.py        # Small Gemini client: key in Credential Manager, model fallback

@@ -335,20 +335,119 @@ class CalendarTests(DbTestCase):
 
 
 class DocumentTests(DbTestCase):
-    def test_update_keeps_secondary_info(self):
-        d = db.add_document("Vehicles", "CRLV / Carro", "Car", "123", "Renavam 999")
-        db.update_document(d, "Vehicles", "CRLV / Carro", "Car", "456", "", "2030-01-01", "")
-        doc = db.get_documents()[0]
-        self.assertEqual((doc[4], doc[5], doc[7]), ("456", "Renavam 999", "2030-01-01"))
+    TODAY = date(2026, 10, 5)
 
-    @unittest.skipUnless(secure.AVAILABLE, "cryptography not installed")
-    def test_sensitive_fields_are_encrypted_at_rest(self):
-        db.add_document("Identity", "CPF", "Me", "111.222.333-44")
+    def add(self, title, doc_type, days_from_today, **kw):
+        return db.add_tracked_doc(title, doc_type, (self.TODAY + timedelta(days=days_from_today)).isoformat(), **kw)
+
+    def test_type_presets_and_status(self):
+        cnh = self.add("My CNH", "CNH", 90)
+        passport = self.add("Passport", "Passaporte", 120)
+        ipva = self.add("IPVA Honda", "IPVA", -3)
+        by_id = {d["id"]: d for d in db.get_tracked_docs(self.TODAY)}
+        self.assertEqual((by_id[cnh]["category"], by_id[cnh]["warn_days"], by_id[cnh]["status"]), ("Identity", 60, "ok"))
+        self.assertEqual((by_id[passport]["warn_days"], by_id[passport]["status"]), (180, "soon"))
+        self.assertEqual((by_id[ipva]["annual"], by_id[ipva]["status"], by_id[ipva]["days_left"]), (True, "expired", -3))
+        self.assertEqual([d["id"] for d in db.get_tracked_docs(self.TODAY)], [ipva, passport, cnh])  # by urgency
+
+    def test_number_is_optional_encrypted_and_never_listed(self):
+        bare = self.add("RG", "RG / CIN", 400)
+        full = self.add("CNH", "CNH", 400, number="123456789", notes="Category B")
+        listed = {d["id"]: d for d in db.get_tracked_docs(self.TODAY)}
+        self.assertNotIn("number", listed[full])
+        self.assertEqual((listed[bare]["has_number"], listed[full]["has_number"]), (False, True))
+        self.assertEqual(db.get_doc_secrets(full), ("123456789", "Category B"))
+        if secure.AVAILABLE:
+            conn = db.get_connection()
+            raw = conn.execute("SELECT number FROM tracked_documents WHERE id = ?", (full,)).fetchone()[0]
+            conn.close()
+            self.assertTrue(raw.startswith(secure.PREFIX))
+
+    def test_renew_records_history_and_annual_suggestion(self):
+        ipva = self.add("IPVA", "IPVA", 10)
+        doc = db.get_tracked_doc(ipva, self.TODAY)
+        nxt = db.suggested_renewal_date(doc)
+        self.assertEqual(nxt, (self.TODAY + timedelta(days=10)).replace(year=2027))
+        db.renew_doc(ipva, nxt.isoformat(), on=self.TODAY)
+        doc = db.get_tracked_doc(ipva, self.TODAY)
+        self.assertEqual((doc["expiration_date"], doc["status"]), (nxt.isoformat(), "ok"))
+        self.assertEqual(db.get_doc_renewals(ipva)[0]["new_expiration"], nxt.isoformat())
+
+    def test_renewal_quest_created_once_and_completed_by_renewing(self):
+        cnh = self.add("CNH", "CNH", 30)
+        self.add("RG", "RG / CIN", 300)  # not in its window yet
+        created = db.sync_renewal_quests(self.TODAY)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(db.sync_renewal_quests(self.TODAY), [])  # no duplicates
+        quest = db.get_quest(created[0])
+        self.assertEqual((quest["title"], quest["sub_total"]), ("Renew CNH", 3))
+        xp = db.renew_doc(cnh, "2036-10-05", on=self.TODAY)
+        self.assertEqual(xp, XP_QUEST)
+        self.assertEqual(db.get_quest(created[0])["status"], "Complete")
+
+    def test_renewal_quest_not_recreated_after_manual_completion_and_can_be_disabled(self):
+        self.add("Seguro", "Seguro auto", 5)
+        quest_id = db.sync_renewal_quests(self.TODAY)[0]
+        db.complete_quest(quest_id)
+        self.assertEqual(db.sync_renewal_quests(self.TODAY), [])
+        db.set_hud_setting(db.SETTING_DOC_QUESTS, "false")
+        self.add("IPTU", "IPTU", 5)
+        self.assertEqual(db.sync_renewal_quests(self.TODAY), [])
+
+    def test_notification_milestones_fire_once_each(self):
+        doc_id = self.add("CNH", "CNH", 30)
+        self.assertEqual([s for _, s in db.get_doc_notifications(self.TODAY)], ["window"])
+        db.mark_doc_notified(doc_id, "window")
+        self.assertEqual(db.get_doc_notifications(self.TODAY), [])
+        self.assertEqual([s for _, s in db.get_doc_notifications(self.TODAY + timedelta(days=25))], ["week"])
+        self.assertEqual([s for _, s in db.get_doc_notifications(self.TODAY + timedelta(days=30))], ["due"])
+        db.update_tracked_doc(doc_id, expiration_date="2030-01-01")  # new date restarts reminders
+        self.assertEqual(db.get_tracked_doc(doc_id)["notified_stage"], "")
+
+    def test_calendar_items(self):
+        cnh = self.add("CNH", "CNH", 30)            # warn started 30 days ago, due in 30
+        old = self.add("Old", "Outro", -2)          # expired -> also shown today
+        items = db.get_docs_for_calendar(self.TODAY - timedelta(days=40), self.TODAY + timedelta(days=40), self.TODAY)
+        kinds = sorted((d["id"], d["kind"], day) for day, docs in items.items() for d in docs)
+        self.assertIn((cnh, "due", self.TODAY + timedelta(days=30)), kinds)
+        self.assertIn((cnh, "warn", self.TODAY - timedelta(days=30)), kinds)
+        self.assertIn((old, "expired", self.TODAY), kinds)
+
+    def test_pin(self):
+        self.assertFalse(db.has_doc_pin())
+        db.set_doc_pin("4321")
+        self.assertTrue(db.has_doc_pin())
+        self.assertTrue(db.check_doc_pin("4321"))
+        self.assertFalse(db.check_doc_pin("1234"))
+        self.assertNotIn("4321", db.get_hud_settings()[db.SETTING_DOC_PIN])
+
+    def test_forgotten_pin_wipes_only_secrets(self):
+        doc_id = self.add("CNH", "CNH", 400, number="999", notes="x")
+        db.set_doc_pin("1111")
+        db.reset_doc_pin_and_wipe_secrets()
+        self.assertFalse(db.has_doc_pin())
+        self.assertEqual(db.get_doc_secrets(doc_id), ("", ""))
+        self.assertEqual(db.get_tracked_doc(doc_id)["title"], "CNH")
+
+    def test_update_rejects_unknown_fields(self):
+        doc_id = self.add("X", "Outro", 10)
+        with self.assertRaises(ValueError):
+            db.update_tracked_doc(doc_id, quest_id=5)
+
+    def test_legacy_documents_import_safe_fields_then_delete(self):
         conn = db.get_connection()
-        raw = conn.execute("SELECT doc_number FROM personal_documents").fetchone()[0]
+        conn.execute("INSERT INTO personal_documents (category, doc_type, title, doc_number, expiration_date) "
+                     "VALUES ('Vehicles', 'CRLV / Carro', 'Honda', '123', '2027-03-01')")
+        conn.execute("INSERT INTO personal_documents (category, doc_type, title, doc_number) "
+                     "VALUES ('Identity', 'CPF', 'Me', '111.222.333-44')")  # no date -> not imported
+        conn.commit()
         conn.close()
-        self.assertTrue(raw.startswith(secure.PREFIX))
-        self.assertEqual(db.get_documents()[0][4], "111.222.333-44")
+        self.assertEqual(db.count_legacy_documents(), 2)
+        self.assertEqual(db.remove_legacy_documents(import_safe_fields=True), 1)
+        self.assertEqual(db.count_legacy_documents(), 0)
+        doc = db.get_tracked_docs()[0]
+        self.assertEqual((doc["title"], doc["category"], doc["expiration_date"], doc["has_number"]),
+                         ("Honda", "Vehicle", "2027-03-01", False))
 
 
 class StudyTests(DbTestCase):

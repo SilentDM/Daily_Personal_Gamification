@@ -174,6 +174,7 @@ def init_db():
     _run_calendar_migrations(conn)
     _run_study_migrations(conn)
     _run_quest_migrations(conn)
+    _run_document_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -1514,67 +1515,6 @@ def export_to_csv():
 
     return str(file_path)
 
-def get_documents(category_filter: str = "All"):
-    conn = get_connection()
-    cursor = conn.cursor()
-    query = """
-        SELECT id, category, doc_type, title, doc_number, secondary_info, issue_date,
-               expiration_date, notes, COALESCE(extra_fields, '[]')
-        FROM personal_documents
-        WHERE active = 1
-    """
-    if category_filter != "All":
-        cursor.execute(query + " AND category = ? ORDER BY id DESC", (category_filter,))
-    else:
-        cursor.execute(query + " ORDER BY id DESC")
-    rows = cursor.fetchall()
-    conn.close()
-
-    out = []
-    for r in rows:
-        r = list(r)
-        for i in (4, 5, 8, 9):  # doc_number, secondary_info, notes, extra_fields
-            r[i] = secure.decrypt(r[i])
-        out.append(tuple(r))
-    return out
-
-def add_document(category: str, doc_type: str, title: str, doc_number: str, secondary_info: str = "", issue_date: str = "", expiration_date: str = "", notes: str = "", extra_fields: str = "[]"):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO personal_documents (category, doc_type, title, doc_number, secondary_info, issue_date, expiration_date, notes, extra_fields)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (category, doc_type, title, secure.encrypt(doc_number), secure.encrypt(secondary_info),
-          issue_date, expiration_date, secure.encrypt(notes), secure.encrypt(extra_fields)))
-    doc_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return doc_id
-
-def update_document(doc_id: int, category: str, doc_type: str, title: str, doc_number: str, issue_date: str, expiration_date: str, notes: str, extra_fields: str = "[]", secondary_info=None):
-    """secondary_info=None keeps the stored value (the editor does not show that field)."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE personal_documents
-        SET category = ?, doc_type = ?, title = ?, doc_number = ?,
-            issue_date = ?, expiration_date = ?, notes = ?, extra_fields = ?
-        WHERE id = ?
-    """, (category, doc_type, title, secure.encrypt(doc_number),
-          issue_date, expiration_date, secure.encrypt(notes), secure.encrypt(extra_fields), doc_id))
-    if secondary_info is not None:
-        cursor.execute("UPDATE personal_documents SET secondary_info = ? WHERE id = ?",
-                       (secure.encrypt(secondary_info), doc_id))
-    conn.commit()
-    conn.close()
-
-def delete_document(doc_id: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE personal_documents SET active = 0 WHERE id = ?", (doc_id,))
-    conn.commit()
-    conn.close()
-
 def parse_flexible_date(date_str: str):
     if not date_str or not date_str.strip():
         return None
@@ -1586,28 +1526,318 @@ def parse_flexible_date(date_str: str):
             continue
     return None
 
-def get_expiring_documents(days_ahead: int = 60):
-    """Returns active documents expiring within `days_ahead` days or already expired."""
-    docs = get_documents("All")
-    today = date.today()
-    expiring = []
 
-    for d in docs:
-        doc_type = d[2]
-        title = d[3]
-        exp = d[7] if len(d) > 7 else ""
+# --- Documents: a lean expiration tracker (number/notes optional and encrypted) ---
+# category -> [(doc_type, default warn days, renews every year)]
+DOC_TYPES = {
+    "Identity": [("RG / CIN", 60, False), ("CNH", 60, False), ("Passaporte", 180, False),
+                 ("Título de Eleitor", 30, False)],
+    "Vehicle": [("CRLV / Licenciamento", 30, True), ("IPVA", 30, True), ("Seguro auto", 30, True)],
+    "Home": [("IPTU", 30, True), ("Seguro residencial", 30, True), ("Contrato de aluguel", 60, False)],
+    "Health": [("Plano de saúde", 30, True), ("Exame / Vacina", 30, False)],
+    "Other": [("Outro", 30, False)],
+}
+DOC_FIELDS = ("id", "title", "doc_type", "category", "expiration_date", "warn_days", "annual",
+              "number", "notes", "quest_id", "quest_for", "notified_stage", "created_at")
+_EDITABLE_DOC_FIELDS = {"title", "doc_type", "category", "expiration_date", "warn_days", "annual", "number", "notes"}
+SETTING_DOC_PIN = "doc_pin_hash"
+SETTING_DOC_QUESTS = "doc_renewal_quests"  # "true" / "false"
 
-        if exp and exp.strip():
-            exp_date = parse_flexible_date(exp)
-            if exp_date:
-                delta = (exp_date - today).days
-                limit = 180 if ("passaporte" in doc_type.lower() or "passport" in doc_type.lower()) else days_ahead
 
-                if delta <= limit:
-                    expiring.append((title, doc_type, exp_date, delta))
+def doc_type_defaults(doc_type: str):
+    """(category, warn_days, annual) for a preset type; sensible defaults otherwise."""
+    for category, types in DOC_TYPES.items():
+        for name, warn, annual in types:
+            if name == doc_type:
+                return category, warn, annual
+    return "Other", 30, False
 
-    expiring.sort(key=lambda x: x[3])
-    return expiring
+
+def doc_status(doc: dict, today: date = None):
+    """('expired' | 'soon' | 'ok', days_left, warn_start date)."""
+    today = today or date.today()
+    exp = date.fromisoformat(doc["expiration_date"])
+    days = (exp - today).days
+    warn_start = exp - timedelta(days=max(0, doc["warn_days"] or 0))
+    if days < 0:
+        return "expired", days, warn_start
+    if today >= warn_start:
+        return "soon", days, warn_start
+    return "ok", days, warn_start
+
+
+def _doc_from_row(row, today=None):
+    d = dict(zip(DOC_FIELDS, row))
+    d["annual"] = bool(d["annual"])
+    d["warn_days"] = d["warn_days"] or 0
+    d["has_number"] = bool(d["number"])
+    d["has_notes"] = bool(d["notes"])
+    del d["number"], d["notes"]  # secrets only via get_doc_secrets()
+    d["status"], d["days_left"], warn_start = doc_status(d, today)
+    d["warn_start"] = warn_start.isoformat()
+    return d
+
+
+def get_tracked_docs(today: date = None):
+    """Documents sorted by urgency (expired, soon, ok; then by date). Secrets are not included."""
+    conn = get_connection()
+    rows = conn.execute(f"SELECT {', '.join(DOC_FIELDS)} FROM tracked_documents").fetchall()
+    conn.close()
+    docs = [_doc_from_row(r, today) for r in rows]
+    order = {"expired": 0, "soon": 1, "ok": 2}
+    docs.sort(key=lambda d: (order[d["status"]], d["expiration_date"], d["title"].lower()))
+    return docs
+
+
+def get_tracked_doc(doc_id: int, today: date = None):
+    return next((d for d in get_tracked_docs(today) if d["id"] == doc_id), None)
+
+
+def get_doc_secrets(doc_id: int):
+    """Decrypted (number, notes) — the UI only calls this when the documents are unlocked."""
+    conn = get_connection()
+    row = conn.execute("SELECT number, notes FROM tracked_documents WHERE id = ?", (doc_id,)).fetchone()
+    conn.close()
+    if not row:
+        return "", ""
+    return secure.decrypt(row[0] or ""), secure.decrypt(row[1] or "")
+
+
+def add_tracked_doc(title: str, doc_type: str, expiration_date: str, category: str = None, warn_days: int = None,
+                    annual: bool = None, number: str = "", notes: str = "") -> int:
+    cat, warn, ann = doc_type_defaults(doc_type)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO tracked_documents (title, doc_type, category, expiration_date, warn_days, annual, number, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (title, doc_type, category or cat, expiration_date, warn if warn_days is None else warn_days,
+          int(ann if annual is None else annual), secure.encrypt(number.strip()), secure.encrypt(notes.strip())))
+    doc_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return doc_id
+
+
+def update_tracked_doc(doc_id: int, **fields):
+    unknown = set(fields) - _EDITABLE_DOC_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown document fields: {sorted(unknown)}")
+    if not fields:
+        return
+    for key in ("number", "notes"):
+        if key in fields:
+            fields[key] = secure.encrypt((fields[key] or "").strip())
+    if "annual" in fields:
+        fields["annual"] = int(bool(fields["annual"]))
+    if "expiration_date" in fields:
+        fields["notified_stage"] = ""  # a new date restarts the reminders (fields were validated above)
+    conn = get_connection()
+    conn.execute(f"UPDATE tracked_documents SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                 (*fields.values(), doc_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_tracked_doc(doc_id: int):
+    """Removes the document and its history for good (nothing sensitive is left behind)."""
+    conn = get_connection()
+    conn.execute("DELETE FROM tracked_documents WHERE id = ?", (doc_id,))
+    conn.execute("DELETE FROM doc_renewals WHERE doc_id = ?", (doc_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_doc_renewals(doc_id: int):
+    conn = get_connection()
+    rows = conn.execute("SELECT renewed_on, old_expiration, new_expiration FROM doc_renewals "
+                        "WHERE doc_id = ? ORDER BY renewed_on DESC, id DESC", (doc_id,)).fetchall()
+    conn.close()
+    return [{"renewed_on": r[0], "old_expiration": r[1], "new_expiration": r[2]} for r in rows]
+
+
+def suggested_renewal_date(doc: dict) -> date:
+    """Annual items move one year ahead; others keep the old date as a starting point for editing."""
+    exp = date.fromisoformat(doc["expiration_date"])
+    if doc["annual"]:
+        try:
+            return exp.replace(year=exp.year + 1)
+        except ValueError:  # 29 Feb
+            return exp.replace(year=exp.year + 1, day=28)
+    return exp
+
+
+def renew_doc(doc_id: int, new_expiration: str, on: date = None) -> float:
+    """Records a renewal, moves the expiration date and completes the linked renewal quest (its XP)."""
+    on = on or date.today()
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT expiration_date, quest_id FROM tracked_documents WHERE id = ?",
+                         (doc_id,)).fetchone()
+    if not row:
+        conn.close()
+        return 0.0
+    cursor.execute("INSERT INTO doc_renewals (doc_id, renewed_on, old_expiration, new_expiration) VALUES (?, ?, ?, ?)",
+                   (doc_id, on.isoformat(), row[0], new_expiration))
+    cursor.execute("UPDATE tracked_documents SET expiration_date = ?, notified_stage = '', quest_id = NULL "
+                   "WHERE id = ?", (new_expiration, doc_id))
+    conn.commit()
+    conn.close()
+    xp = 0.0
+    if row[1]:
+        quest = get_quest(row[1], on=on)
+        if quest and quest["status"] != "Complete":
+            xp = complete_quest(row[1], on=on)
+    return xp
+
+
+def renewal_quests_enabled() -> bool:
+    return get_hud_settings().get(SETTING_DOC_QUESTS, "true") == "true"
+
+
+def sync_renewal_quests(today: date = None):
+    """Creates one renewal quest per document entering its warning window (once per expiration date)."""
+    if not renewal_quests_enabled():
+        return []
+    today = today or date.today()
+    created = []
+    for doc in get_tracked_docs(today):
+        if doc["status"] == "ok" or doc["quest_for"] == doc["expiration_date"]:
+            continue
+        exp = date.fromisoformat(doc["expiration_date"])
+        quest_id = add_quest(
+            f"Renew {doc['title']}", quest_type="Side", difficulty="Normal",
+            notes=f"Created automatically: {doc['title']} ({doc['doc_type']}) expires on {exp:%d/%m/%Y}.",
+            next_step=f"Check what's needed to renew {doc['doc_type']}",
+            subquests=[f"Check what's needed to renew {doc['doc_type']}", f"Renew {doc['doc_type']}",
+                       "Press 'Renewed' in Documents with the new date"])
+        conn = get_connection()
+        conn.execute("UPDATE tracked_documents SET quest_id = ?, quest_for = ? WHERE id = ?",
+                     (quest_id, doc["expiration_date"], doc["id"]))
+        conn.commit()
+        conn.close()
+        created.append(quest_id)
+    return created
+
+
+def doc_notification_stage(doc: dict):
+    """Reminder milestones: 'window' (warning starts), 'week' (7 days left), 'due' (expires today/expired)."""
+    if doc["status"] == "ok":
+        return None
+    if doc["days_left"] <= 0:
+        return "due"
+    if doc["days_left"] <= 7:
+        return "week"
+    return "window"
+
+
+def get_doc_notifications(today: date = None):
+    """[(doc, stage)] whose milestone has not been notified yet (at most 3 reminders per cycle)."""
+    return [(d, s) for d in get_tracked_docs(today)
+            for s in [doc_notification_stage(d)] if s and s != (d["notified_stage"] or "")]
+
+
+def mark_doc_notified(doc_id: int, stage: str):
+    conn = get_connection()
+    conn.execute("UPDATE tracked_documents SET notified_stage = ? WHERE id = ?", (stage, doc_id))
+    conn.commit()
+    conn.close()
+
+
+def get_docs_for_calendar(start: date, end: date, today: date = None):
+    """{date: [doc + "kind"]}: 'due' on the expiration date, 'warn' when the warning starts;
+    expired documents also show on today."""
+    today = today or date.today()
+    out = {}
+    for doc in get_tracked_docs(today):
+        exp = date.fromisoformat(doc["expiration_date"])
+        warn = date.fromisoformat(doc["warn_start"])
+        if start <= exp <= end:
+            out.setdefault(exp, []).append(dict(doc, kind="due"))
+        if warn != exp and start <= warn <= end:
+            out.setdefault(warn, []).append(dict(doc, kind="warn"))
+        if doc["status"] == "expired" and start <= today <= end and exp != today:
+            out.setdefault(today, []).append(dict(doc, kind="expired"))
+    return out
+
+
+def get_expiring_documents(days_ahead: int = None, today: date = None):
+    """Documents needing attention (warning window or expired): [(title, doc_type, exp_date, days_left)]."""
+    return [(d["title"], d["doc_type"], date.fromisoformat(d["expiration_date"]), d["days_left"])
+            for d in get_tracked_docs(today) if d["status"] != "ok"]
+
+
+# --- Documents PIN (an app-level privacy screen; the data itself is encrypted by secure.py) ---
+def _hash_pin(pin: str, salt: bytes) -> str:
+    import hashlib
+    return hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, 200_000).hex()
+
+
+def has_doc_pin() -> bool:
+    return bool(get_hud_settings().get(SETTING_DOC_PIN))
+
+
+def set_doc_pin(pin: str):
+    salt = os.urandom(16)
+    set_hud_setting(SETTING_DOC_PIN, f"{salt.hex()}${_hash_pin(pin, salt)}")
+
+
+def check_doc_pin(pin: str) -> bool:
+    import hmac
+    stored = get_hud_settings().get(SETTING_DOC_PIN) or ""
+    if "$" not in stored:
+        return not stored
+    salt_hex, digest = stored.split("$", 1)
+    return hmac.compare_digest(_hash_pin(pin or "", bytes.fromhex(salt_hex)), digest)
+
+
+def remove_doc_pin():
+    set_hud_setting(SETTING_DOC_PIN, "")
+
+
+def reset_doc_pin_and_wipe_secrets():
+    """Forgotten PIN: removes the PIN *and* every saved number/note (dates and names stay)."""
+    conn = get_connection()
+    conn.execute("UPDATE tracked_documents SET number = '', notes = ''")
+    conn.commit()
+    conn.close()
+    remove_doc_pin()
+
+
+# --- Old-format documents (personal_documents): import the safe fields, then delete for good ---
+_LEGACY_CATEGORY = {"Identity": "Identity", "Vehicles": "Vehicle", "Housing & Finance": "Home", "Other": "Other"}
+
+
+def count_legacy_documents() -> int:
+    conn = get_connection()
+    n = conn.execute("SELECT COUNT(*) FROM personal_documents").fetchone()[0]
+    conn.close()
+    return n
+
+
+def remove_legacy_documents(import_safe_fields: bool) -> int:
+    """Optionally imports title/type/category/expiration (never numbers or notes), then deletes every
+    old-format row permanently. Returns how many documents were imported."""
+    conn = get_connection()
+    rows = conn.execute("SELECT title, doc_type, category, expiration_date FROM personal_documents "
+                        "WHERE active = 1").fetchall()
+    conn.close()
+    imported = 0
+    if import_safe_fields:
+        for title, doc_type, category, exp in rows:
+            exp_d = parse_flexible_date(exp or "")
+            if not exp_d:
+                continue  # nothing to track without an expiration date
+            _, warn, annual = doc_type_defaults(doc_type)
+            add_tracked_doc(title, doc_type, exp_d.isoformat(), category=_LEGACY_CATEGORY.get(category, "Other"),
+                            warn_days=180 if "passap" in (doc_type or "").lower() else warn, annual=annual)
+            imported += 1
+    conn = get_connection()
+    conn.execute("DELETE FROM personal_documents")
+    conn.commit()
+    conn.execute("VACUUM")  # so the deleted encrypted values don't linger in free pages
+    conn.close()
+    return imported
 
 # --- Automatic daily backup with rotation ---
 def backup_db(keep: int = 14):
@@ -1920,6 +2150,36 @@ def _run_quest_migrations(conn):
             completed_on TEXT NOT NULL,
             xp REAL DEFAULT 0,
             UNIQUE(task_id, period_key)
+        )
+    """)
+
+
+def _run_document_migrations(conn):
+    """Documents overhaul: a lean tracker table + renewal history (old rows are removed from the UI)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tracked_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            category TEXT DEFAULT 'Other',
+            expiration_date TEXT NOT NULL,
+            warn_days INTEGER DEFAULT 30,
+            annual INTEGER DEFAULT 0,
+            number TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            quest_id INTEGER,
+            quest_for TEXT DEFAULT '',
+            notified_stage TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS doc_renewals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            renewed_on TEXT NOT NULL,
+            old_expiration TEXT,
+            new_expiration TEXT
         )
     """)
 
