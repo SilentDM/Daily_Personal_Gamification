@@ -26,7 +26,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
   * **Quest notes progress:** +2 XP when notes grow by 10+ characters (15 min cooldown).
   * **Study journal:** +2 XP for the first real entry (20+ characters) of the day per chapter · **Study review:** +5 XP each.
 * **Levels 1–100:** One level every 10 XP, max level at 1,000 XP.
-* **Rank Titles:** **Novice** $ightarrow$ **Apprentice** (16) $ightarrow$ **Disciplined** (36) $ightarrow$ **Elite** (61) $ightarrow$ **Master** (81) $ightarrow$ **Centurion** (100).
+* **Rank Titles:** **Novice** $\rightarrow$ **Apprentice** (16) $\rightarrow$ **Disciplined** (36) $\rightarrow$ **Elite** (61) $\rightarrow$ **Master** (81) $\rightarrow$ **Centurion** (100).
 
 ### 📊 3. Performance & Analytics Dashboard
 * **KPI Metrics:** Track Weekly Average, Task Completion Rate (%), Vice Resistance Rate (%), and your Best Performing Day.
@@ -41,6 +41,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
   * **Journal** while you study: log each session (notes, time spent, date) and keep a "where I stopped / next step" bookmark.
   * **Wrap-up** to finish: the "Proof of Work" template (ELI5, toy sandbox, break-it test, recall flashcards) with a completion checklist.
   * **Spaced repetition** after mastery: flashcard reviews on days 1, 3, 7 and 21 (a struggled review repeats the next day), shown in the Study tab, Calendar and wallpaper. Turn it off per chapter for projects.
+  * **AI deep review (optional, Gemini free tier):** when you master a chapter, Gemini reads your journal and wrap-up and builds a review pack — a clean summary, key concepts, gaps/mistakes in your notes and harder questions for each review stage (recall → application → scenarios → synthesis). During reviews you can type an answer and let Gemini grade it. Set it up with the ✨ button in the Study tab (your key is stored in the Windows Credential Manager). Requires `google-genai` (in requirements.txt).
 * **Calendar:** Month, Week, Day (time grid with current-time line, overlapping events side by side, mini-month) and searchable Agenda views.
   * Events with start time, duration or all-day, color, notes and a per-event reminder (tray notification), plus an alarm dialog at start time.
   * Repeats: daily, weekdays, weekly, monthly, yearly, with an optional end date. Edit or delete just one occurrence, this and following, or the whole series.

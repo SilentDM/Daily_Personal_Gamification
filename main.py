@@ -24,6 +24,7 @@ if _sys.platform == "win32":
 
 import flet as ft
 import database as db
+import ai_review
 import threading
 import time
 import os
@@ -297,6 +298,7 @@ def main(page: ft.Page):
                 elif now.hour != last_checked_hour:
                     last_checked_hour = now.hour
                     update_desktop_wallpaper()
+                    ai_review.retry_pending(on_done=study_view._ai_done)  # queued/failed AI review packs
 
                 # 3. Calendar reminders (each event has its own lead time) and start alarms
                 tomorrow = today + timedelta(days=1)

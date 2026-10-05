@@ -3,6 +3,8 @@ from datetime import date, timedelta
 
 import flet as ft
 
+import ai_gemini
+import ai_review
 import database as db
 from constants import XP_STUDY, XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS, DAY_NAMES
 from ui_helpers import confirm_action
@@ -126,43 +128,165 @@ def review_status(review: dict, today: date):
     return f"In {(due - today).days} day(s)", ft.Colors.GREY_400
 
 
+STAGE_FOCUS = {1: "recall", 2: "application", 3: "scenarios & edge cases", 4: "synthesis — teach it back"}
+VERDICT_STYLE = {
+    "correct": ("Correct", ft.Colors.GREEN_ACCENT, ft.Icons.CHECK_CIRCLE),
+    "partial": ("Partially correct", ft.Colors.AMBER_ACCENT, ft.Icons.ADJUST),
+    "incorrect": ("Not quite", ft.Colors.RED_ACCENT, ft.Icons.CANCEL),
+}
+
+
+def _section_title(text, color=ft.Colors.CYAN_ACCENT):
+    return ft.Text(text, size=11, weight=ft.FontWeight.BOLD, color=color)
+
+
+def _ai_question_card(page, topic, index, q, reveal_list):
+    """One AI question: type an answer, check it with Gemini, or just reveal the model answer."""
+    answer_f = ft.TextField(hint_text="Your answer…", multiline=True, min_lines=2, max_lines=8, dense=True,
+                            text_size=13)
+    model_answer = ft.Text(q.get("answer", ""), size=13, color=ft.Colors.GREEN_200, selectable=True)
+    answer_box = ft.Container(content=ft.Column([_section_title("MODEL ANSWER", ft.Colors.GREEN_200), model_answer],
+                                                spacing=2, tight=True), visible=False)
+    reveal_list.append(answer_box)
+    result = ft.Column(spacing=4, tight=True, visible=False)
+    check_btn = ft.TextButton("Check with AI", icon=ft.Icons.AUTO_AWESOME)
+
+    def show_answer(e):
+        answer_box.visible = True
+        page.update()
+
+    def check(e):
+        text = (answer_f.value or "").strip()
+        if not text:
+            result.controls = [ft.Text("Type an answer first.", size=12, color=ft.Colors.GREY_400)]
+            result.visible = True
+            page.update()
+            return
+        check_btn.disabled = True
+        result.controls = [ft.Row([ft.ProgressRing(width=14, height=14, stroke_width=2),
+                                   ft.Text("Gemini is checking your answer…", size=12, color=ft.Colors.GREY_400)])]
+        result.visible = True
+        page.update()
+
+        def work():
+            import ai_review
+            try:
+                grade = ai_review.grade_answer(topic, q.get("question", ""), q.get("answer", ""), text)
+                label, color, icon = VERDICT_STYLE.get(grade.verdict.lower().strip(), VERDICT_STYLE["partial"])
+                controls = [ft.Row([ft.Icon(icon, color=color, size=18),
+                                    ft.Text(label, color=color, weight=ft.FontWeight.BOLD)], spacing=6),
+                            ft.Text(grade.feedback, size=13, selectable=True)]
+                controls += [ft.Text(f"• {m}", size=12, color=ft.Colors.AMBER_200) for m in grade.missing]
+                answer_box.visible = True
+            except Exception as exc:
+                controls = [ft.Text(str(exc), size=12, color=ft.Colors.RED_ACCENT)]
+            result.controls = controls
+            check_btn.disabled = False
+            page.update()
+
+        import threading
+        threading.Thread(target=work, daemon=True, name="ai-grade").start()
+
+    check_btn.on_click = check
+    import ai_gemini
+    check_btn.disabled = not ai_gemini.is_configured()
+    if check_btn.disabled:
+        check_btn.tooltip = "Set up your Gemini API key in AI settings"
+
+    kind = (q.get("kind") or "").strip()
+    return ft.Container(
+        content=ft.Column([
+            ft.Row([ft.Text(f"Q{index}. {q.get('question', '')}", size=14, weight=ft.FontWeight.W_600,
+                            selectable=True, expand=True),
+                    ft.Container(content=ft.Text(kind, size=10, color=REVIEW_COLOR),
+                                 border=ft.Border.all(1, REVIEW_COLOR), border_radius=4,
+                                 padding=ft.Padding.symmetric(horizontal=4, vertical=1)) if kind else ft.Container()],
+                   vertical_alignment=ft.CrossAxisAlignment.START),
+            answer_f,
+            ft.Row([check_btn, ft.TextButton("Show answer", icon=ft.Icons.VISIBILITY, on_click=show_answer)],
+                   spacing=4),
+            result,
+            answer_box,
+        ], spacing=6, tight=True),
+        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=8, padding=10,
+    )
+
+
+def _pack_summary_controls(pack):
+    controls = [_section_title("WHAT THE LESSON WAS ABOUT"), ft.Text(pack.get("summary", ""), size=13, selectable=True)]
+    concepts = pack.get("key_concepts") or []
+    if concepts:
+        controls.append(_section_title("KEY CONCEPTS"))
+        controls += [ft.Text(spans=[ft.TextSpan(f"{c.get('name', '')}: ", ft.TextStyle(weight=ft.FontWeight.BOLD)),
+                                    ft.TextSpan(c.get("explanation", ""))], size=13, selectable=True)
+                     for c in concepts]
+    gaps = pack.get("gaps") or []
+    if gaps:
+        controls.append(_section_title("GAPS IN YOUR NOTES", ft.Colors.AMBER_ACCENT))
+        controls += [ft.Column([ft.Text(f"⚠ {g.get('issue', '')}", size=13, color=ft.Colors.AMBER_200, selectable=True),
+                                ft.Text(f"→ {g.get('correction', '')}", size=13, selectable=True)], spacing=2, tight=True)
+                     for g in gaps]
+    return controls
+
+
 def open_review_dialog(page: ft.Page, review: dict, on_done=None):
-    """Spaced-repetition review: read the summary, recall the flashcards, rate yourself.
+    """Spaced-repetition review. With an AI pack: harder questions per stage, answer checking by
+    Gemini and the lesson summary / gaps; without one: the chapter's own flashcards.
 
     `review` needs id, session_id and review_no (as returned by db.get_pending_reviews).
     """
     chapter = db.get_study_session(review["session_id"])
     if not chapter:
         return
-    cards = parse_flashcards(chapter["recall_questions"])
-    answers = []
+    stage = max(1, min(review["review_no"], len(REVIEW_DAYS)))
+    pack_row = db.get_ai_pack(chapter["id"])
+    # a failed *re*generation keeps the previous content, so use whatever content exists
+    pack = pack_row["content"] if pack_row and pack_row["content"] else None
+    reveal = []
+    body = []
 
-    card_controls = []
+    if pack:
+        import ai_review
+        body.append(ft.Text(f"Stage {stage}: {STAGE_FOCUS.get(stage, '')}. Answer from memory — type it and "
+                            "let Gemini check it, or reveal the model answer.", size=12, color=ft.Colors.GREY_400))
+        body += [_ai_question_card(page, chapter["topic"], i, q, reveal)
+                 for i, q in enumerate(ai_review.questions_for_stage(pack, stage), 1)]
+    else:
+        status = pack_row["status"] if pack_row else ""
+        note = {"pending": "AI review pack is queued — these are your own flashcards for now.",
+                "generating": "AI review pack is being generated — these are your own flashcards for now.",
+                "failed": f"AI review pack failed ({pack_row['error'] if pack_row else ''}) — using your flashcards."
+                }.get(status, "Try to answer each question from memory, then reveal the answers.")
+        body.append(ft.Text(note, size=12, color=ft.Colors.GREY_400))
+
+    cards = parse_flashcards(chapter["recall_questions"])
+    own = []
     for i, (q, a) in enumerate(cards, 1):
         ans = ft.Text(a or "(no answer written)", size=13, color=ft.Colors.GREEN_200, visible=False, selectable=True)
-        answers.append(ans)
-        card_controls.append(ft.Container(
+        reveal.append(ans)
+        own.append(ft.Container(
             content=ft.Column([ft.Text(f"Q{i}. {q}", size=14, weight=ft.FontWeight.W_600, selectable=True), ans],
                               spacing=4, tight=True),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=8, padding=10,
         ))
-    if not card_controls:
-        card_controls.append(ft.Text("No flashcards yet — try to explain the topic out loud, "
-                                     "then check the summary below.", color=ft.Colors.GREY_400))
+    if own:
+        if pack:
+            body.append(_section_title("YOUR FLASHCARDS", ft.Colors.GREY_400))
+        body += own
+    elif not pack:
+        body.append(ft.Text("No flashcards yet — try to explain the topic out loud, then check the summary below.",
+                            color=ft.Colors.GREY_400))
 
-    summary = ft.Container(
-        content=ft.Column([
-            ft.Text("ELI5 SUMMARY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
-            ft.Text(chapter["eli5"] if is_filled(chapter["eli5"], DEFAULT_ELI5) else "(empty)",
-                    size=13, selectable=True),
-        ], spacing=4, tight=True),
-        visible=False, padding=ft.Padding.only(top=6),
-    )
+    summary_controls = _pack_summary_controls(pack) if pack else [
+        _section_title("ELI5 SUMMARY"),
+        ft.Text(chapter["eli5"] if is_filled(chapter["eli5"], DEFAULT_ELI5) else "(empty)", size=13, selectable=True)]
+    summary = ft.Container(content=ft.Column(summary_controls, spacing=6, tight=True),
+                           visible=False, padding=ft.Padding.only(top=6))
+    reveal.append(summary)
 
-    def reveal(e):
-        for ans in answers:
-            ans.visible = True
-        summary.visible = True
+    def reveal_all(e):
+        for ctl in reveal:
+            ctl.visible = True
         e.control.visible = False
         page.update()
 
@@ -178,16 +302,15 @@ def open_review_dialog(page: ft.Page, review: dict, on_done=None):
     page.show_dialog(ft.AlertDialog(
         modal=True,
         title=ft.Column([
-            ft.Text(f"Review {review['review_no']} of {len(REVIEW_DAYS)}", size=12, color=REVIEW_COLOR),
+            ft.Text(f"Review {review['review_no']} of {len(REVIEW_DAYS)}" + (" • AI deep review" if pack else ""),
+                    size=12, color=REVIEW_COLOR),
             ft.Text(chapter["topic"], weight=ft.FontWeight.BOLD),
         ], spacing=2, tight=True),
         content=ft.Container(
-            width=560,
+            width=620,
             content=ft.Column([
-                ft.Text("Try to answer each question from memory, then reveal the answers.",
-                        size=12, color=ft.Colors.GREY_400),
-                *card_controls,
-                ft.OutlinedButton("Show answers & summary", icon=ft.Icons.VISIBILITY, on_click=reveal),
+                *body,
+                ft.OutlinedButton("Show all answers & summary", icon=ft.Icons.VISIBILITY, on_click=reveal_all),
                 summary,
             ], spacing=10, tight=True, scroll=ft.ScrollMode.AUTO,
                 horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
@@ -197,6 +320,93 @@ def open_review_dialog(page: ft.Page, review: dict, on_done=None):
             ft.TextButton(f"Struggled — repeat tomorrow (+{XP_REVIEW} XP)", on_click=finish(False)),
             ft.Button(f"Remembered (+{XP_REVIEW} XP)", icon=ft.Icons.CHECK, on_click=finish(True)),
         ],
+    ))
+
+
+def open_ai_settings(page: ft.Page, on_change=None):
+    """Gemini key (kept in the Windows Credential Manager), model preference and auto-generation."""
+    import ai_gemini
+    import ai_review
+
+    settings = db.get_hud_settings()
+    status = ft.Text(ai_gemini.status_text(), size=13,
+                     color=ft.Colors.GREEN_ACCENT if ai_gemini.is_configured() else ft.Colors.AMBER_ACCENT)
+    key_f = ft.TextField(label="Gemini API key", password=True, can_reveal_password=True, dense=True,
+                         hint_text="Paste a key to save or replace it (the saved key is never shown)")
+    model_f = ft.TextField(label="Preferred model (optional)", dense=True,
+                           value=settings.get(ai_gemini.SETTING_PREFERRED, ""),
+                           hint_text="e.g. gemini-2.5-flash — empty = automatic")
+    auto_cb = ft.Checkbox(label="Generate an AI review pack automatically when I master a chapter",
+                          value=ai_review.auto_enabled())
+    result = ft.Text("", size=12)
+    missing = db.get_chapters_missing_ai_pack()
+
+    def refresh_status():
+        status.value = ai_gemini.status_text()
+        status.color = ft.Colors.GREEN_ACCENT if ai_gemini.is_configured() else ft.Colors.AMBER_ACCENT
+
+    def save(e):
+        if (key_f.value or "").strip():
+            ai_gemini.set_api_key(key_f.value)
+            key_f.value = ""
+        db.set_hud_setting(ai_gemini.SETTING_PREFERRED, (model_f.value or "").strip().removeprefix("models/"))
+        ai_review.set_auto_enabled(bool(auto_cb.value))
+        refresh_status()
+        result.value, result.color = "Saved.", ft.Colors.GREEN_ACCENT
+        ai_review.retry_pending(on_done=on_change, force=True)
+        page.update()
+
+    def remove(e):
+        ai_gemini.set_api_key("")
+        refresh_status()
+        result.value, result.color = "Key removed from the Credential Manager.", ft.Colors.GREY_400
+        page.update()
+
+    def test(e):
+        result.value, result.color = "Testing…", ft.Colors.GREY_400
+        page.update()
+
+        def work():
+            ok, msg = ai_gemini.test_connection(key_f.value)
+            result.value, result.color = msg, ft.Colors.GREEN_ACCENT if ok else ft.Colors.RED_ACCENT
+            page.update()
+
+        import threading
+        threading.Thread(target=work, daemon=True, name="ai-test").start()
+
+    def generate_missing(e):
+        if not ai_gemini.is_configured():
+            result.value, result.color = "Save an API key first.", ft.Colors.RED_ACCENT
+            page.update()
+            return
+        for sid in missing:
+            db.set_ai_pack(sid, "pending", reset_attempts=True)
+        ai_review.start_generation(missing, on_change)
+        result.value, result.color = f"Generating {len(missing)} pack(s) in the background…", ft.Colors.GREEN_ACCENT
+        e.control.disabled = True
+        page.update()
+
+    page.show_dialog(ft.AlertDialog(
+        modal=True,
+        title=ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=REVIEW_COLOR), ft.Text("AI review settings",
+                                                                                weight=ft.FontWeight.BOLD)]),
+        content=ft.Container(width=560, content=ft.Column([
+            status,
+            key_f,
+            ft.Row([ft.TextButton("Test connection", icon=ft.Icons.WIFI_TETHERING, on_click=test),
+                    ft.TextButton("Remove saved key", icon=ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_300,
+                                  on_click=remove)], spacing=4),
+            model_f,
+            auto_cb,
+            ft.Button(f"Generate missing packs ({len(missing)})", icon=ft.Icons.AUTO_AWESOME,
+                      on_click=generate_missing, disabled=not missing),
+            result,
+            ft.Text("Get a free key at Google AI Studio (aistudio.google.com → Get API key). When a pack is "
+                    "generated, the chapter's journal and wrap-up are sent to Google's Gemini API; on the free "
+                    "tier Google may use that content to improve its products.", size=11, color=ft.Colors.GREY_500),
+        ], spacing=12, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+        actions=[ft.TextButton("Close", on_click=lambda e: (page.pop_dialog(), on_change and on_change(None))),
+                 ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)],
     ))
 
 
@@ -243,8 +453,15 @@ class StudyView(ft.Row):
         if self.app_page:
             self.app_page.update()
 
+    def _ai_done(self, session_id=None):
+        """An AI pack finished (background thread): redraw only if it is on screen."""
+        if session_id is None or (self.visible and self.selected_session_id == session_id
+                                  and self.pane == "reviews"):
+            self.refresh_list()
+
     # ------------------------------------------------------------ public (used by main.py)
     def refresh_list(self):
+        ai_review.retry_pending(on_done=self._ai_done)
         chapters, visible = self._chapters()
         if self._selected(chapters) is None:
             pick = visible[0] if visible else (chapters[0] if chapters else None)
@@ -274,7 +491,10 @@ class StudyView(ft.Row):
 
         controls = [
             ft.Row([ft.Icon(ft.Icons.SCHOOL, color=ft.Colors.CYAN_ACCENT, size=24),
-                    ft.Text("Study Chapters", size=18, weight=ft.FontWeight.BOLD)]),
+                    ft.Text("Study Chapters", size=18, weight=ft.FontWeight.BOLD, expand=True),
+                    ft.IconButton(ft.Icons.AUTO_AWESOME, icon_color=REVIEW_COLOR if ai_gemini.is_configured()
+                                  else ft.Colors.GREY_500, tooltip="AI review settings (Gemini)",
+                                  on_click=lambda e: open_ai_settings(self.app_page, on_change=self._ai_done))]),
             ft.Row([new_topic, ft.IconButton(ft.Icons.ADD_CIRCLE, icon_color=ft.Colors.CYAN_ACCENT,
                                              tooltip="Add chapter", on_click=add)]),
         ]
@@ -443,7 +663,7 @@ class StudyView(ft.Row):
         review_cb = ft.Checkbox(
             label="Spaced-repetition reviews after mastery (turn off for projects)",
             value=ch["needs_review"],
-            on_change=lambda e: (db.set_study_needs_review(ch["id"], bool(e.control.value)), self._changed()),
+            on_change=lambda e: self._toggle_reviews(ch, bool(e.control.value)),
         )
         return ft.Container(
             content=ft.Column([
@@ -453,6 +673,13 @@ class StudyView(ft.Row):
             ], spacing=6),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=10, padding=12,
         )
+
+    def _toggle_reviews(self, ch, on: bool):
+        db.set_study_needs_review(ch["id"], on)
+        pack = db.get_ai_pack(ch["id"])
+        if on and ch["status"] == "Mastered" and not (pack and pack["status"] == "ready"):
+            ai_review.queue_on_mastery(ch["id"], on_done=self._ai_done)
+        self._changed()
 
     def change_stage(self, ch, stage):
         if stage == ch["status"]:
@@ -476,6 +703,8 @@ class StudyView(ft.Row):
 
     def _apply_stage(self, ch, stage):
         db.set_study_status(ch["id"], stage)
+        if stage == "Mastered" and ch["needs_review"]:
+            ai_review.queue_on_mastery(ch["id"], on_done=self._ai_done)
         if stage == "Reviewing":
             self.pane = "wrapup"
         elif stage == "Mastered":
@@ -667,7 +896,7 @@ class StudyView(ft.Row):
         if ch["status"] != "Mastered" and not reviews:
             return [info, ft.Text("Reviews start once the chapter is mastered.", color=ft.Colors.GREY_500)]
 
-        rows = []
+        rows = [self._ai_pack_card(ch)] if ch["status"] == "Mastered" else []
         for r in reviews:
             label, color = review_status(r, today)
             pending = not r["done_date"]
@@ -712,3 +941,48 @@ class StudyView(ft.Row):
                 rows.append(ft.Button("Start review schedule", icon=ft.Icons.EVENT_REPEAT,
                                       on_click=lambda e: (db.set_study_needs_review(ch["id"], True), self._changed())))
         return [info, *rows]
+
+    def _ai_pack_card(self, ch):
+        sid = ch["id"]
+        pack = db.get_ai_pack(sid)
+        configured = ai_gemini.is_configured()
+
+        def regenerate(e):
+            db.set_ai_pack(sid, "pending", reset_attempts=True)
+            ai_review.start_generation(sid, self._ai_done)
+            self.refresh_list()
+
+        if ai_review.is_generating(sid) or (pack and pack["status"] == "generating"):
+            icon, color = ft.ProgressRing(width=18, height=18, stroke_width=2), REVIEW_COLOR
+            text, action = "Gemini is writing your deep review…", None
+        elif pack and pack["content"]:
+            content = pack["content"]
+            n_q, n_g = len(content.get("questions") or []), len(content.get("gaps") or [])
+            icon, color = ft.Icon(ft.Icons.AUTO_AWESOME, color=REVIEW_COLOR), REVIEW_COLOR
+            text = f"AI deep review ready — {n_q} questions across {len(REVIEW_DAYS)} stages" + \
+                (f", {n_g} gap(s) found in your notes" if n_g else "") + \
+                (f" • {pack['model']}" if pack["model"] else "")
+            if pack["status"] == "failed":
+                text += f"\nLast regeneration failed: {pack['error']}"
+            action = ft.TextButton("Regenerate", icon=ft.Icons.REFRESH, on_click=regenerate, disabled=not configured)
+        elif not configured:
+            icon, color = ft.Icon(ft.Icons.AUTO_AWESOME_OUTLINED, color=ft.Colors.GREY_500), ft.Colors.GREY_400
+            text = "AI deep review: add your Gemini API key to generate harder, stage-by-stage questions."
+            action = ft.TextButton("AI settings", icon=ft.Icons.SETTINGS,
+                                   on_click=lambda e: open_ai_settings(self.app_page, on_change=self._ai_done))
+        elif pack and pack["status"] == "failed":
+            icon, color = ft.Icon(ft.Icons.ERROR_OUTLINE, color=ft.Colors.RED_ACCENT), ft.Colors.RED_ACCENT
+            text = f"AI deep review failed ({pack['attempts']} attempt(s)): {pack['error']}"
+            action = ft.TextButton("Retry now", icon=ft.Icons.REFRESH, on_click=regenerate)
+        else:
+            icon, color = ft.Icon(ft.Icons.AUTO_AWESOME_OUTLINED, color=REVIEW_COLOR), ft.Colors.GREY_300
+            text = "No AI deep review for this chapter yet."
+            action = ft.TextButton("Generate now", icon=ft.Icons.AUTO_AWESOME, on_click=regenerate)
+
+        return ft.Container(
+            content=ft.Row([icon, ft.Text(text, size=12, color=color, expand=True), action or ft.Container()],
+                           spacing=10),
+            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.TEAL), border_radius=8,
+            border=ft.Border.all(1, ft.Colors.with_opacity(0.3, ft.Colors.TEAL)),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+        )
