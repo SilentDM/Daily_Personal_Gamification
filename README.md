@@ -64,7 +64,11 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
   * The number and notes are **optional**, encrypted (key in the Windows Credential Manager — back it up with `python secure.py show-key`) and can be hidden behind a **PIN**.
 
 ### 🖼️ 5. Desktop Wallpaper HUD
-* Renders your level, streak, today's score, quests, studies (next step and reviews due), upcoming events and document alerts onto your wallpaper (position, accent color and widgets are configurable).
+* A **modular card** on your wallpaper: turn blocks on/off and reorder them — streak & today's score, level & XP, **insight of the day**, quests, studies & reviews due, upcoming calendar, document alerts (empty blocks hide).
+* **1 or 2 columns**, Compact / Normal / Large size, position and accent color; text **scales with the screen resolution** (sharp on 1440p / 4K).
+* **Insight of the day (Gemini, optional):** one short, kind, specific sentence per day based on your recent habits, quests and studies (Português or English; one call per day).
+* **Backgrounds:** pure black, the project image, or **a new image each day from a folder** you choose — images fill the screen without being stretched.
+* **Live preview** in the tab before applying, and **Pause & restore**: your original wallpaper is kept on the first apply and comes back whenever you pause the HUD.
 
 ### ⚡ 6. Quality of Life & Storage
 * **⚡ Quick-Fill Today:** Automatically marks all unlogged tasks for today (`Ok` for positive habits, `Resisted` for bad habits) in one click.
@@ -92,11 +96,12 @@ Daily_Personal_Gamification/
 ├── study_view.py       # Study chapters: journal, wrap-up, reviews, AI settings
 ├── calendar_view.py    # Calendar and events
 ├── documents_view.py   # Document expiration tracker, renewals, PIN lock
-├── wallpaper.py        # Wallpaper HUD renderer
+├── wallpaper.py        # Wallpaper HUD: modular blocks, scaling, backgrounds, pause/restore
 ├── wallpaper_view.py   # HUD settings screen
 ├── ai_gemini.py        # Small Gemini client: key in Credential Manager, model fallback
 ├── ai_review.py        # AI deep reviews: review packs and answer grading
 ├── ai_quest.py         # AI quest planner (no dates or deadlines)
+├── ai_insight.py       # Insight of the day for the wallpaper (one Gemini call per day)
 ├── ui_helpers.py       # Shared confirmation dialog
 ├── tests/              # Database and AI tests (unittest, no network)
 ├── base_wallpaper.jpg  # Background image for the HUD

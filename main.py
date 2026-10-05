@@ -34,7 +34,8 @@ import pystray
 import winsound
 from datetime import datetime, date, timedelta
 from PIL import Image, ImageDraw
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update
+from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update, get_blocks as get_hud_blocks
+import ai_insight
 from applog import setup_logging
 
 from schedule_view import ScheduleView, SETTING_REMINDED, reminder_time as schedule_reminder_time
@@ -340,6 +341,8 @@ def main(page: ft.Page):
                     next_doc_check = time.monotonic() + 3600
                     if db.sync_renewal_quests():
                         todo_view.render()
+                    if any(b["id"] == "insight" and b["on"] for b in get_hud_blocks()):
+                        ai_insight.ensure_today(on_ready=update_desktop_wallpaper)  # once a day, background
                     if 8 <= now.hour < 22:
                         for doc, stage in db.get_doc_notifications():
                             try:
