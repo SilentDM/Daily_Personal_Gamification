@@ -1,400 +1,783 @@
+import math
+import threading
+from datetime import date
+
 import flet as ft
+import flet_charts as fch
+
+import ai_gemini
 import database as db
-from wallpaper import request_wallpaper_update as update_desktop_wallpaper
+from constants import QUEST_TYPES, QUEST_DIFFICULTY_XP, QUEST_REPEATS, XP_SUBQUEST, XP_QUEST_LOG, DAY_NAMES
 from ui_helpers import confirm_action
-from constants import TASK_STAGES, QUEST_BONUS_XP
+from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
-STAGE_COLORS = {
-    "Planning": ft.Colors.BLUE_GREY_400,
-    "Started": ft.Colors.BLUE_400,
-    "In Progress": ft.Colors.ORANGE_400,
-    "Almost There": ft.Colors.AMBER_400,
-    "Complete": ft.Colors.GREEN_ACCENT,
+TYPE_STYLE = {
+    "Main": (ft.Icons.STAR_ROUNDED, ft.Colors.AMBER_ACCENT),
+    "Side": (ft.Icons.EXPLORE_OUTLINED, ft.Colors.LIGHT_BLUE_300),
+    "Epic": (ft.Icons.WORKSPACE_PREMIUM, ft.Colors.PURPLE_ACCENT_100),
 }
+DIFFICULTY_COLORS = {"Easy": ft.Colors.GREEN_300, "Normal": ft.Colors.CYAN_300,
+                     "Hard": ft.Colors.ORANGE_ACCENT, "Epic": ft.Colors.PURPLE_ACCENT_100}
+REPEAT_LABELS = {"none": "One-time", "weekly": "Every week", "monthly": "Every month"}
+PERIOD_WORD = {"weekly": "this week", "monthly": "this month"}
+FILTERS = ("active", "hold", "fame")
+GOLD = ft.Colors.AMBER_ACCENT
 
-class TodoView(ft.Column):
+
+# ---------------------------------------------------------------- helpers
+def fmt_num(value) -> str:
+    if value is None:
+        return "—"
+    return f"{value:g}" if float(value).is_integer() else f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def fmt_day(iso: str) -> str:
+    try:
+        d = date.fromisoformat(iso[:10])
+    except (TypeError, ValueError):
+        return iso or ""
+    return f"{DAY_NAMES[d.weekday()]}, {d:%d/%m/%Y}"
+
+
+def parse_number(text):
+    try:
+        return float(str(text).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def badge(text, color, size=10):
+    return ft.Container(content=ft.Text(text, size=size, color=color, weight=ft.FontWeight.BOLD),
+                        border=ft.Border.all(1, color), border_radius=4,
+                        padding=ft.Padding.symmetric(horizontal=5, vertical=1))
+
+
+def section(title, controls, color=ft.Colors.CYAN_ACCENT, trailing=None):
+    head = ft.Row([ft.Text(title, size=11, weight=ft.FontWeight.BOLD, color=color, expand=True)] +
+                  ([trailing] if trailing else []))
+    return ft.Container(content=ft.Column([head, *controls], spacing=8,
+                                          horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
+                        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=10, padding=14)
+
+
+# ---------------------------------------------------------------- AI planner
+def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
+    """Gemini proposes a quest (or extra steps for `existing`); the user edits it before saving."""
+    if not ai_gemini.is_configured():
+        def open_settings(e):
+            page.pop_dialog()
+            from study_view import open_ai_settings
+            open_ai_settings(page)
+
+        page.show_dialog(ft.AlertDialog(
+            title=ft.Text("AI quest planner", weight=ft.FontWeight.BOLD),
+            content=ft.Text(ai_gemini.status_text() + "\nThe planner uses the same Gemini key as the AI study "
+                            "reviews (Study tab → ✨)."),
+            actions=[ft.TextButton("Close", on_click=lambda e: page.pop_dialog()),
+                     ft.Button("Open AI settings", icon=ft.Icons.SETTINGS, on_click=open_settings)],
+        ))
+        return
+
+    goal_f = ft.TextField(label="What do you want to achieve?", value=existing["title"] if existing else "",
+                          autofocus=not existing, dense=True)
+    context_f = ft.TextField(label="Context (optional): where you are now, constraints, what you know",
+                             multiline=True, min_lines=2, max_lines=5, dense=True)
+    status = ft.Text("", size=12)
+    plan_area = ft.Column(spacing=10, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+    state = {"plan": None}
+    plan_btn = ft.Button("Plan with AI" if not existing else "Suggest steps", icon=ft.Icons.AUTO_AWESOME)
+    save_btn = ft.Button("Create quest" if not existing else "Add selected steps", icon=ft.Icons.CHECK,
+                         visible=False)
+
+    def build_preview(plan):
+        rows = []
+        sub_rows = []
+        for s in plan.subquests:
+            cb = ft.Checkbox(value=True)
+            tf = ft.TextField(value=s, dense=True, expand=True, text_size=13)
+            sub_rows.append((cb, tf))
+            rows.append(ft.Row([cb, tf], spacing=4))
+        state["subs"] = sub_rows
+        if existing:
+            controls = [ft.Text("Suggested extra steps (untick the ones you don't want):", size=12,
+                                color=ft.Colors.GREY_400), *rows]
+            if not rows:
+                controls.append(ft.Text("Gemini had no extra steps to add.", color=ft.Colors.GREY_500))
+            if plan.measurable and not existing.get("has_metric") and existing.get("repeat") == "none":
+                state["metric_cb"] = ft.Checkbox(
+                    label=f"Also track a target: {fmt_num(plan.metric_start)} → {fmt_num(plan.metric_target)} "
+                          f"{plan.metric_unit}", value=False)
+                controls.append(state["metric_cb"])
+            plan_area.controls = controls
+            return
+        state["title"] = ft.TextField(label="Quest title", value=plan.title, dense=True)
+        state["type"] = ft.Dropdown(label="Type", value=plan.quest_type, dense=True, width=130,
+                                    options=[ft.DropdownOption(t) for t in QUEST_TYPES])
+        state["difficulty"] = ft.Dropdown(label="Difficulty", value=plan.difficulty, dense=True, width=190,
+                                          options=[ft.DropdownOption(key=d, text=f"{d} (+{xp} XP)")
+                                                   for d, xp in QUEST_DIFFICULTY_XP.items()])
+        state["repeat"] = ft.Dropdown(label="Repeats", value=plan.repeat, dense=True, width=160,
+                                      options=[ft.DropdownOption(key=r, text=REPEAT_LABELS[r]) for r in QUEST_REPEATS])
+        state["description"] = ft.TextField(label="Description", value=plan.description, multiline=True,
+                                            min_lines=2, max_lines=5, dense=True)
+        state["first"] = ft.TextField(label="First step (becomes your 'next step' bookmark)", value=plan.first_step,
+                                      dense=True)
+        state["metric_cb"] = ft.Checkbox(label="Track a numeric target", value=plan.measurable)
+        state["unit"] = ft.TextField(label="Unit", value=plan.metric_unit, dense=True, width=110)
+        state["start"] = ft.TextField(label="Start", value=fmt_num(plan.metric_start) if plan.measurable else "",
+                                      dense=True, width=110)
+        state["target"] = ft.TextField(label="Target", value=fmt_num(plan.metric_target) if plan.measurable else "",
+                                       dense=True, width=110)
+        metric_row = ft.Row([state["unit"], state["start"], state["target"]], spacing=8, visible=plan.measurable)
+        state["metric_cb"].on_change = lambda e: (setattr(metric_row, "visible", bool(e.control.value)), page.update())
+        plan_area.controls = [
+            ft.Divider(height=1, color=ft.Colors.GREY_800),
+            state["title"],
+            ft.Row([state["type"], state["difficulty"], state["repeat"]], spacing=8, wrap=True),
+            state["description"],
+            ft.Text("Steps (untick or edit before saving):", size=12, color=ft.Colors.GREY_400),
+            *rows,
+            state["first"],
+            state["metric_cb"],
+            metric_row,
+        ]
+
+    def run_plan(e):
+        if not (goal_f.value or "").strip():
+            status.value, status.color = "Describe your goal first.", ft.Colors.RED_ACCENT
+            page.update()
+            return
+        plan_btn.disabled = True
+        status.value, status.color = "Gemini is planning your quest…", ft.Colors.GREY_400
+        page.update()
+
+        def work():
+            import ai_quest
+            try:
+                plan = ai_quest.plan_quest(goal_f.value, context_f.value or "", existing=existing)
+                state["plan"] = plan
+                build_preview(plan)
+                status.value = ""
+                save_btn.visible = True
+                plan_btn.content = "Plan again"
+            except Exception as exc:
+                status.value, status.color = str(exc), ft.Colors.RED_ACCENT
+            plan_btn.disabled = False
+            page.update()
+
+        threading.Thread(target=work, daemon=True, name="ai-quest-plan").start()
+
+    def save(e):
+        plan = state["plan"]
+        if plan is None:
+            return
+        steps = [tf.value.strip() for cb, tf in state.get("subs", []) if cb.value and (tf.value or "").strip()]
+        if existing:
+            for s in steps:
+                db.add_subquest(existing["id"], s)
+            if state.get("metric_cb") is not None and state["metric_cb"].value:
+                db.update_quest(existing["id"], metric_unit=plan.metric_unit, metric_start=plan.metric_start,
+                                metric_target=plan.metric_target)
+            page.pop_dialog()
+            if on_saved:
+                on_saved(existing["id"])
+            return
+        title = (state["title"].value or "").strip()
+        if not title:
+            status.value, status.color = "The quest needs a title.", ft.Colors.RED_ACCENT
+            page.update()
+            return
+        metric = {}
+        if state["metric_cb"].value and state["repeat"].value == "none":
+            start, target = parse_number(state["start"].value), parse_number(state["target"].value)
+            if start is None or target is None or not (state["unit"].value or "").strip():
+                status.value, status.color = "Fill unit, start and target (numbers) or untick the target.", \
+                    ft.Colors.RED_ACCENT
+                page.update()
+                return
+            metric = {"metric_unit": state["unit"].value.strip(), "metric_start": start, "metric_target": target}
+        quest_id = db.add_quest(title, quest_type=state["type"].value, difficulty=state["difficulty"].value,
+                                repeat=state["repeat"].value, notes=(state["description"].value or "").strip(),
+                                next_step=(state["first"].value or "").strip(), subquests=steps, **metric)
+        page.pop_dialog()
+        if on_saved:
+            on_saved(quest_id)
+
+    plan_btn.on_click = run_plan
+    save_btn.on_click = save
+    page.show_dialog(ft.AlertDialog(
+        modal=True,
+        title=ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=GOLD),
+                      ft.Text("AI quest planner" if not existing else f"More steps for '{existing['title']}'",
+                              weight=ft.FontWeight.BOLD, expand=True)]),
+        content=ft.Container(width=620, content=ft.Column(
+            [goal_f, context_f, ft.Row([plan_btn, status], spacing=12), plan_area,
+             ft.Text("No deadlines: Gemini is told to order steps, never to schedule them.", size=11,
+                     color=ft.Colors.GREY_600)],
+            spacing=12, tight=True, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()), save_btn],
+    ))
+
+
+# ---------------------------------------------------------------- view
+class TodoView(ft.Row):
     def __init__(self, page: ft.Page):
-        super().__init__(scroll=ft.ScrollMode.AUTO, expand=True, visible=False)
+        super().__init__(expand=True, spacing=0, visible=False,
+                         vertical_alignment=ft.CrossAxisAlignment.STRETCH)
         self.app_page = page
-        self.expanded_tasks = set()
-        self.notes_drafts = {}
+        self.selected_id = None
+        self.filter = "active"
+        self.drafts = {}      # quest_id -> unsent quest-log entry {"text", "value", "next_step"}
+        self.feedback = {}    # quest_id -> last feedback message
+        self.sidebar = ft.Column(spacing=8, expand=True)
+        self.workspace = ft.Column(spacing=14, expand=True, scroll=ft.ScrollMode.AUTO,
+                                   horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+        self.controls = [
+            ft.Container(content=self.sidebar, width=340, padding=15, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW),
+            ft.VerticalDivider(width=1, color=ft.Colors.GREY_800),
+            ft.Container(content=self.workspace, expand=True,
+                         padding=ft.Padding.only(left=20, right=30, top=15, bottom=30)),
+        ]
         self.render()
 
-    def on_delete_task(self, task_id):
-        db.delete_task(task_id)
-        self.expanded_tasks.discard(task_id)
-        self.render()
-        update_desktop_wallpaper()
+    # ------------------------------------------------------------ data helpers
+    def _visible(self, quests):
+        return self._visible_for(quests, self.filter)
 
-    def on_move_task(self, task_id: int, direction: str):
-        db.move_task(task_id, direction)
-        self.render()
-
-    def on_toggle_quest(self, task_id: int, complete: bool):
-        db.set_task_manual_status(task_id, complete)
-        self.render()
-        update_desktop_wallpaper()
-
-    def toggle_expand(self, task_id):
-        if task_id in self.expanded_tasks:
-            self.expanded_tasks.remove(task_id)
-        else:
-            self.expanded_tasks.add(task_id)
-        self.render()
-
-    def on_subtask_status_change(self, subtask_id: int, new_status: str):
-        db.update_subtask_status(subtask_id, new_status)
+    def _changed(self):
         self.render()
         update_desktop_wallpaper()
 
-    def on_add_subtask(self, task_id: int, title_field: ft.TextField):
-        if title_field.value and title_field.value.strip():
-            db.add_subtask(task_id, title_field.value.strip())
-            title_field.value = ""
-            self.render()
-            update_desktop_wallpaper()
-
-    def on_delete_subtask(self, subtask_id: int):
-        db.delete_subtask(subtask_id)
-        self.render()
-        update_desktop_wallpaper()
-
-    def on_move_subtask(self, subtask_id: int, direction: str):
-        db.move_subtask(subtask_id, direction)
-        self.render()
-
-    def save_notes_clicked(self, task_id: int, notes_val: str, btn: ft.Button):
-        xp_earned = db.save_task_notes_with_progress(task_id, notes_val)
-        self.notes_drafts.pop(task_id, None)
-        if xp_earned > 0:
-            btn.content = f"Saved! (+{xp_earned:.0f} XP 🔥)"
-            btn.icon = ft.Icons.BOLT
-        else:
-            btn.content = "Saved!"
-            btn.icon = ft.Icons.CHECK
-        update_desktop_wallpaper()
+    def _update(self):
         if self.app_page:
             self.app_page.update()
 
+    def select(self, quest_id):
+        self.selected_id = quest_id
+        self.render()
+
+    def _saved_from_planner(self, quest_id):
+        self.selected_id = quest_id
+        self.filter = "active"
+        self._changed()
+
+    # ------------------------------------------------------------ public (used by main.py)
     def render(self):
+        quests = db.get_quests()
+        visible = self._visible(quests)
+        if not any(q["id"] == self.selected_id for q in visible):
+            self.selected_id = visible[0]["id"] if visible else None
+        self._render_sidebar(quests, visible)
+        self._render_workspace(next((q for q in quests if q["id"] == self.selected_id), None))
+        self._update()
+
+    # ------------------------------------------------------------ sidebar
+    def _render_sidebar(self, quests, visible):
+        new_f = ft.TextField(hint_text="New quest…", expand=True, dense=True, text_size=13)
+
+        def add(e=None):
+            title = (new_f.value or "").strip()
+            if title:
+                self.selected_id = db.add_quest(title)
+                self.filter = "active"
+                self._changed()
+
+        new_f.on_submit = add
         year, week, _ = db.get_current_week_info()
-        self.controls.clear()
-        raw_tasks = db.get_tasks()
-        completed_this_week = db.get_weekly_completed_tasks_count(year, week)
-        bonus_xp = completed_this_week * QUEST_BONUS_XP
+        done_count, week_xp = db.get_quest_week_stats(year, week)
+        counts = {f: len(self._visible_for(quests, f)) for f in FILTERS}
 
-        # 1. Header Banner
-        bonus_banner = ft.Container(
-            content=ft.Row([
-                ft.Row([
-                    ft.Icon(ft.Icons.MILITARY_TECH, color=ft.Colors.AMBER_ACCENT, size=32),
-                    ft.Column([
-                        ft.Text(f"Quests Completed This Week: {completed_this_week}", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Text(f"🎁 Week {week} Bonus: +{bonus_xp} XP earned", size=13, color=ft.Colors.GREEN_ACCENT)
-                    ], spacing=2)
-                ]),
-                ft.Text(
-                    "Click on any quest to unfold subquests, track steps, and edit notes!",
-                    size=12,
-                    color=ft.Colors.GREY_400,
-                    italic=True
-                )
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-            border_radius=12,
-            padding=15,
-            margin=ft.Margin.symmetric(horizontal=20, vertical=10)
-        )
-        self.controls.append(bonus_banner)
+        controls = [
+            ft.Row([ft.Icon(ft.Icons.MILITARY_TECH, color=GOLD, size=26),
+                    ft.Text("Quest Log", size=18, weight=ft.FontWeight.BOLD, expand=True),
+                    ft.IconButton(ft.Icons.AUTO_AWESOME, icon_color=GOLD if ai_gemini.is_configured()
+                                  else ft.Colors.GREY_500, tooltip="Plan a new quest with AI",
+                                  on_click=lambda e: open_quest_planner(self.app_page, self._saved_from_planner))]),
+            ft.Row([new_f, ft.IconButton(ft.Icons.ADD_CIRCLE, icon_color=GOLD, tooltip="Add quest", on_click=add)]),
+            ft.Container(
+                content=ft.Row([ft.Icon(ft.Icons.EMOJI_EVENTS, color=GOLD, size=18),
+                                ft.Text(f"This week: {done_count} quest{'s' if done_count != 1 else ''} done • "
+                                        f"+{week_xp:g} XP from quests", size=12, expand=True)]),
+                bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.AMBER), border_radius=8, padding=8,
+            ),
+            ft.SegmentedButton(
+                segments=[ft.Segment(value="active", label=ft.Text(f"Active {counts['active']}", size=12, no_wrap=True)),
+                          ft.Segment(value="hold", label=ft.Text(f"On hold {counts['hold']}", size=12, no_wrap=True)),
+                          ft.Segment(value="fame", label=ft.Text(f"Hall of Fame {counts['fame']}", size=12,
+                                                                 no_wrap=True))],
+                selected=[self.filter], show_selected_icon=False,
+                on_change=lambda e: self._set_filter(e.control.selected[0]) if e.control.selected else None,
+            ),
+            ft.Divider(color=ft.Colors.GREY_800, height=1),
+        ]
+        tiles = [self._tile(q) for q in visible] or [ft.Text(
+            {"active": "No active quests. Add one above, or let ✨ plan one with you!",
+             "hold": "Nothing on hold.",
+             "fame": "Completed quests will be celebrated here."}[self.filter], color=ft.Colors.GREY_500, size=13)]
+        controls.append(ft.Column(tiles, spacing=6, scroll=ft.ScrollMode.AUTO, expand=True))
+        self.sidebar.controls = controls
 
-        # 2. Add New Main Quest Row
-        new_task_input = ft.TextField(
-            hint_text="Enter main quest or project (e.g. Perder Peso, Resolver IR, RPG Campaign)...",
-            expand=True,
-            dense=True,
-            text_size=13
-        )
+    @staticmethod
+    def _visible_for(quests, f):
+        wanted = {"active": "Active", "hold": "On hold", "fame": "Complete"}[f]
+        return [q for q in quests if q["status"] == wanted]
 
-        def add_main_clicked(e):
-            if new_task_input.value and new_task_input.value.strip():
-                new_id = db.add_task(new_task_input.value.strip())
-                new_task_input.value = ""
-                self.expanded_tasks.add(new_id)
-                self.render()
+    def _set_filter(self, value):
+        self.filter = value
+        self.render()
 
-        add_bar = ft.Container(
-            content=ft.Row([
-                new_task_input,
-                ft.Button(
-                    content="Add Main Quest",
-                    icon=ft.Icons.ADD_TASK,
-                    on_click=add_main_clicked
-                )
-            ]),
-            padding=ft.Padding.symmetric(horizontal=20, vertical=5)
-        )
-        self.controls.append(add_bar)
-
-        # 3. Table Header
-        header_row = ft.Container(
-            content=ft.Row([
-                ft.Text("Main Quest", weight=ft.FontWeight.BOLD, size=14, expand=True),
-                ft.Container(content=ft.Text("Progress", weight=ft.FontWeight.BOLD, size=14), width=230),
-                ft.Container(content=ft.Text("Bounty", weight=ft.FontWeight.BOLD, size=14), width=110),
-                ft.Container(width=110)
-            ]),
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH,
-            border_radius=8,
-            padding=ft.Padding.symmetric(horizontal=15, vertical=10),
-            margin=ft.Margin.only(left=20, right=20, top=10, bottom=5)
-        )
-        self.controls.append(header_row)
-
-        if not raw_tasks:
-            self.controls.append(
-                ft.Container(
-                    content=ft.Text("No active quests. Add one above!", color=ft.Colors.GREY_500, size=14),
-                    padding=20,
-                    alignment=ft.Alignment.CENTER
-                )
-            )
-
-        # 4. Quest Cards
-        for task_id, title, status, comp_yr, comp_wk, notes, subtasks, progress_pct in raw_tasks:
-
-            is_complete = (status == "Complete" or progress_pct >= 99.9)
-            is_expanded = (task_id in self.expanded_tasks)
-
-            # Progress Bar Color
-            if is_complete:
-                bar_color = ft.Colors.GREEN_ACCENT
-            elif progress_pct >= 60.0:
-                bar_color = ft.Colors.CYAN_ACCENT
-            elif progress_pct >= 25.0:
-                bar_color = ft.Colors.ORANGE_ACCENT
+    def _tile(self, q):
+        selected = q["id"] == self.selected_id
+        icon, icolor = TYPE_STYLE.get(q["quest_type"], TYPE_STYLE["Main"])
+        dcolor = DIFFICULTY_COLORS.get(q["difficulty"], ft.Colors.CYAN_300)
+        if q["status"] == "Complete":
+            hint = f"Completed {fmt_day(q['completed_at'] or '')} • +{q['xp_reward']} XP"
+            hint_color = GOLD
+        elif q["repeat"] != "none":
+            if q["done_this_period"]:
+                back = db.next_period_start(q["repeat"])
+                hint, hint_color = f"Done {PERIOD_WORD[q['repeat']]} ✓ • back {back:%d/%m}", ft.Colors.GREEN_ACCENT
             else:
-                bar_color = ft.Colors.BLUE_GREY_400
+                hint, hint_color = f"{REPEAT_LABELS[q['repeat']]} • ready", ft.Colors.CYAN_200
+        elif q["next_step"]:
+            hint, hint_color = f"→ {q['next_step']}", ft.Colors.GREY_300
+        elif q["has_metric"]:
+            hint = f"{fmt_num(q['metric_current'])} / {fmt_num(q['metric_target'])} {q['metric_unit']}"
+            hint_color = ft.Colors.GREY_300
+        else:
+            hint, hint_color = f"{q['sub_done']}/{q['sub_total']} steps" if q["sub_total"] else "", ft.Colors.GREY_500
+        bar_color = GOLD if q["status"] == "Complete" else (ft.Colors.GREEN_ACCENT if q["progress_pct"] >= 99.9
+                                                            else icolor)
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([ft.Icon(icon, color=icolor, size=18),
+                        ft.Text(q["title"], size=14, weight=ft.FontWeight.BOLD if selected else ft.FontWeight.W_500,
+                                expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                        badge(f"+{q['xp_reward']}", dcolor)], spacing=6),
+                ft.ProgressBar(value=q["progress_pct"] / 100.0, color=bar_color, bgcolor=ft.Colors.GREY_800, height=4),
+                ft.Text(hint, size=11, color=hint_color, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+                if hint else ft.Container(height=0),
+            ], spacing=4),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST if selected else ft.Colors.TRANSPARENT,
+            border=ft.Border.only(left=ft.BorderSide(3, icolor)),
+            border_radius=8, padding=10, ink=True,
+            on_click=lambda e, qid=q["id"]: self.select(qid),
+        )
 
-            completed_subs = sum(1 for s in subtasks if s[2] == "Complete")
-            ratio_text = f"{completed_subs}/{len(subtasks)} ({int(progress_pct)}%)" if subtasks else f"{int(progress_pct)}%"
-
-            progress_widget = ft.Container(
+    # ------------------------------------------------------------ workspace
+    def _render_workspace(self, q):
+        if q is None:
+            self.workspace.controls = [ft.Container(
                 content=ft.Column([
-                    ft.Row([
-                        ft.Text("Progress", size=11, color=ft.Colors.GREY_400),
-                        ft.Text(ratio_text, size=11, weight=ft.FontWeight.BOLD, color=bar_color)
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.ProgressBar(value=progress_pct / 100.0, color=bar_color, bgcolor=ft.Colors.GREY_800, height=8)
-                ], spacing=4),
-                width=230
-            )
+                    ft.Icon(ft.Icons.MAP_OUTLINED, size=48, color=ft.Colors.GREY_600),
+                    ft.Text("Start a quest on the left — or press ✨ and plan one with Gemini.",
+                            color=ft.Colors.GREY_400),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                alignment=ft.Alignment.CENTER, padding=50)]
+            return
+        controls = [self._header(q), self._progress_card(q)]
+        if q["status"] != "Complete":
+            controls.append(self._next_step_card(q))
+        controls.append(self._subquests_card(q))
+        if q["has_metric"] or (q["repeat"] == "none" and q["status"] != "Complete"):
+            controls.append(self._target_card(q))
+        controls += [self._log_card(q), self._description_card(q)]
+        self.workspace.controls = controls
 
-            bounty_badge = ft.Container(
-                content=ft.Text(
-                    f"+{QUEST_BONUS_XP} XP (W{comp_wk})" if is_complete else "Pending",
-                    size=11,
-                    color=ft.Colors.GREEN_ACCENT if is_complete else ft.Colors.GREY_500,
-                    weight=ft.FontWeight.BOLD if is_complete else ft.FontWeight.NORMAL
-                ),
-                bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.GREEN) if is_complete else ft.Colors.TRANSPARENT,
-                border_radius=6,
-                padding=ft.Padding.symmetric(horizontal=8, vertical=4)
-            )
+    def _save(self, qid, **fields):
+        db.update_quest(qid, **fields)
+        self._changed()
 
-            # Main summary row
-            main_row = ft.Row([
-                ft.Row([
-                    ft.IconButton(
-                        icon=ft.Icons.KEYBOARD_ARROW_DOWN if is_expanded else ft.Icons.KEYBOARD_ARROW_RIGHT,
-                        icon_size=20,
-                        icon_color=ft.Colors.CYAN_ACCENT,
-                        tooltip="Expand / Collapse Steps",
-                        on_click=lambda e, tid=task_id: self.toggle_expand(tid)
-                    ),
-                    (ft.IconButton(
-                        icon=ft.Icons.CHECK_CIRCLE if is_complete else ft.Icons.RADIO_BUTTON_UNCHECKED,
-                        icon_color=ft.Colors.GREEN_ACCENT if is_complete else ft.Colors.CYAN_ACCENT,
-                        icon_size=20,
-                        tooltip="Reopen quest" if is_complete else "Mark quest as complete",
-                        on_click=lambda e, tid=task_id, done=is_complete: self.on_toggle_quest(tid, not done)
-                    ) if not subtasks else ft.Icon(
-                        ft.Icons.CHECK_CIRCLE if is_complete else ft.Icons.RADIO_BUTTON_UNCHECKED,
-                        color=ft.Colors.GREEN_ACCENT if is_complete else ft.Colors.CYAN_ACCENT,
-                        size=20
-                    )),
-                    ft.Text(
-                        title,
-                        size=15,
-                        weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.GREY_400 if is_complete else ft.Colors.WHITE,
-                        style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if is_complete else ft.TextDecoration.NONE),
-                        expand=True
-                    )
-                ], expand=True),
-                progress_widget,
-                ft.Container(content=bounty_badge, width=110),
-                ft.Container(
-                    content=ft.Row([
-                        ft.IconButton(
-                            icon=ft.Icons.ARROW_UPWARD,
-                            icon_size=16,
-                            icon_color=ft.Colors.GREY_400,
-                            tooltip="Move Up",
-                            on_click=lambda e, tid=task_id: self.on_move_task(tid, "up")
-                        ),
-                        ft.IconButton(
-                            icon=ft.Icons.ARROW_DOWNWARD,
-                            icon_size=16,
-                            icon_color=ft.Colors.GREY_400,
-                            tooltip="Move Down",
-                            on_click=lambda e, tid=task_id: self.on_move_task(tid, "down")
-                        ),
-                        ft.IconButton(
-                            icon=ft.Icons.DELETE_OUTLINE,
-                            icon_color=ft.Colors.RED_400,
-                            icon_size=18,
-                            tooltip="Delete Quest",
-                            on_click=lambda e, tid=task_id, t=title: confirm_action(
-                                self.app_page, "Delete quest?",
-                                f"'{t}' and its subquests will be removed.",
-                                lambda: self.on_delete_task(tid))
-                        )
-                    ], spacing=0, alignment=ft.MainAxisAlignment.END),
-                    width=110,
-                    alignment=ft.Alignment.CENTER
-                )
+    def _header(self, q):
+        qid = q["id"]
+        title_f = ft.TextField(value=q["title"], label="Quest", dense=True, expand=True, text_size=16)
+        title_f.on_blur = lambda e: self._save(qid, title=(e.control.value or "").strip() or "Untitled") \
+            if (e.control.value or "").strip() != q["title"] else None
+        type_dd = ft.Dropdown(label="Type", value=q["quest_type"], dense=True, width=130,
+                              options=[ft.DropdownOption(t) for t in QUEST_TYPES],
+                              on_select=lambda e: self._save(qid, quest_type=e.control.value))
+        diff_dd = ft.Dropdown(label="Difficulty", value=q["difficulty"], dense=True, width=190,
+                              options=[ft.DropdownOption(key=d, text=f"{d} (+{xp} XP)")
+                                       for d, xp in QUEST_DIFFICULTY_XP.items()],
+                              on_select=lambda e: self._save(qid, difficulty=e.control.value),
+                              disabled=q["status"] == "Complete")
+        repeat_dd = ft.Dropdown(label="Repeats", value=q["repeat"], dense=True, width=160,
+                                options=[ft.DropdownOption(key=r, text=REPEAT_LABELS[r]) for r in QUEST_REPEATS],
+                                on_select=lambda e: self._save(qid, repeat=e.control.value),
+                                disabled=q["status"] == "Complete",
+                                tooltip="Repeatable quests can be completed once per week/month")
+        actions = []
+        if q["status"] == "Active":
+            actions.append(ft.TextButton("Put on hold", icon=ft.Icons.PAUSE_CIRCLE_OUTLINE,
+                                         on_click=lambda e: (db.set_quest_status(qid, "On hold"), self._changed())))
+        elif q["status"] == "On hold":
+            actions.append(ft.TextButton("Resume", icon=ft.Icons.PLAY_CIRCLE_OUTLINE,
+                                         on_click=lambda e: (db.set_quest_status(qid, "Active"), self._changed())))
+        actions += [
+            ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=16, tooltip="Move quest up",
+                          on_click=lambda e: (db.move_quest(qid, "up"), self.render())),
+            ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=16, tooltip="Move quest down",
+                          on_click=lambda e: (db.move_quest(qid, "down"), self.render())),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_400, tooltip="Delete quest",
+                          on_click=lambda e: confirm_action(
+                              self.app_page, "Delete quest?", f"'{q['title']}', its steps and its log will be removed.",
+                              lambda: (db.delete_quest(qid), self._changed()))),
+        ]
+        return ft.Column([
+            ft.Row([title_f], spacing=10),
+            ft.Row([ft.Row([type_dd, diff_dd, repeat_dd], spacing=8), ft.Row(actions, spacing=0)],
+                   alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ], spacing=10)
+
+    def _progress_card(self, q):
+        qid = q["id"]
+        pct = q["progress_pct"]
+        parts = []
+        if q["sub_total"]:
+            parts.append(f"{q['sub_done']}/{q['sub_total']} steps")
+        if q["has_metric"]:
+            parts.append(f"{fmt_num(q['metric_current'])} of {fmt_num(q['metric_target'])} {q['metric_unit']}")
+        if q["repeat"] != "none":
+            parts.append(f"completed {q['times_completed']} time{'s' if q['times_completed'] != 1 else ''}")
+        feedback = self.feedback.pop(qid, "")
+
+        if q["status"] == "Complete":
+            action = ft.Row([
+                ft.Icon(ft.Icons.EMOJI_EVENTS, color=GOLD),
+                ft.Text(f"Completed {fmt_day(q['completed_at'] or '')} • +{q['xp_reward']} XP earned",
+                        color=GOLD, weight=ft.FontWeight.BOLD, expand=True),
+                ft.TextButton("Reopen", icon=ft.Icons.UNDO, on_click=lambda e: confirm_action(
+                    self.app_page, "Reopen quest?", f"It leaves the Hall of Fame and its +{q['xp_reward']} XP is "
+                    "removed until you complete it again.", lambda: (db.set_quest_status(qid, "Active"),
+                                                                     self._changed()), confirm_label="Reopen")),
             ])
+        elif q["repeat"] != "none" and q["done_this_period"]:
+            back = db.next_period_start(q["repeat"])
+            action = ft.Row([
+                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_ACCENT),
+                ft.Text(f"Done {PERIOD_WORD[q['repeat']]}! Available again {fmt_day(back.isoformat())}.",
+                        color=ft.Colors.GREEN_ACCENT, expand=True),
+                ft.TextButton("Undo", icon=ft.Icons.UNDO,
+                              on_click=lambda e: (db.undo_quest_completion(qid), self._changed())),
+            ])
+        else:
+            label = f"Complete {PERIOD_WORD[q['repeat']]}" if q["repeat"] != "none" else "Complete quest"
+            ready = pct >= 99.9 or not (q["sub_total"] or q["has_metric"])
+            btn = ft.Button(f"{label} (+{q['xp_reward']} XP)", icon=ft.Icons.EMOJI_EVENTS,
+                            on_click=lambda e: self.complete(q),
+                            bgcolor=GOLD if ready else None, color=ft.Colors.BLACK if ready else None,
+                            disabled=q["status"] == "On hold")
+            hint = "All steps done — turn it in!" if pct >= 99.9 and (q["sub_total"] or q["has_metric"]) else \
+                ("On hold — resume it to complete." if q["status"] == "On hold" else
+                 "You can complete it whenever you feel it's done.")
+            action = ft.Row([ft.Text(hint, size=12, color=ft.Colors.GREY_400, expand=True), btn])
 
-            card_items = [main_row]
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([ft.Text(f"{pct:.0f}%", size=26, weight=ft.FontWeight.BOLD),
+                        ft.Text(" • ".join(parts), size=12, color=ft.Colors.GREY_400, expand=True)], spacing=12),
+                ft.ProgressBar(value=pct / 100.0, height=10, bgcolor=ft.Colors.GREY_800,
+                               color=GOLD if q["status"] == "Complete" else (
+                                   ft.Colors.GREEN_ACCENT if pct >= 99.9 else TYPE_STYLE[q["quest_type"]][1])),
+                action,
+                ft.Text(feedback, size=12, color=ft.Colors.GREEN_ACCENT) if feedback else ft.Container(height=0),
+            ], spacing=8),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=10, padding=14,
+            border=ft.Border.all(1, ft.Colors.with_opacity(0.4, GOLD) if q["status"] == "Complete" else
+                                 ft.Colors.with_opacity(0.12, ft.Colors.GREY)),
+        )
 
-            # Expanded Content (Subquests List + Inline Add + Notepad)
-            if is_expanded:
-                sub_rows = []
+    def complete(self, q):
+        xp = db.complete_quest(q["id"])
+        if q["repeat"] != "none":
+            self.feedback[q["id"]] = f"+{xp:g} XP — nice! See you {('next week' if q['repeat'] == 'weekly' else 'next month')}."
+            self._changed()
+            return
+        self._changed()
+        self.app_page.show_dialog(ft.AlertDialog(
+            title=ft.Row([ft.Icon(ft.Icons.EMOJI_EVENTS, color=GOLD, size=32),
+                          ft.Text("Quest complete!", weight=ft.FontWeight.BOLD)]),
+            content=ft.Text(f"'{q['title']}' joins your Hall of Fame. +{xp:g} XP"),
+            actions=[ft.Button("Awesome", on_click=lambda e: self.app_page.pop_dialog())],
+        ))
 
-                for sub_id, sub_title, sub_status, _ in subtasks:
-                    sub_done = (sub_status == "Complete")
-                    sub_color = STAGE_COLORS.get(sub_status, ft.Colors.WHITE)
+    def _next_step_card(self, q):
+        qid = q["id"]
+        field = ft.TextField(value=q["next_step"], hint_text="What's the next small step?", dense=True,
+                             border=ft.InputBorder.NONE, expand=True, text_size=14)
+        field.on_blur = lambda e: self._save(qid, next_step=(e.control.value or "").strip()) \
+            if (e.control.value or "").strip() != q["next_step"] else None
+        return ft.Container(
+            content=ft.Row([ft.Icon(ft.Icons.BOOKMARK, color=ft.Colors.ORANGE_ACCENT),
+                            ft.Column([ft.Text("NEXT STEP", size=11, weight=ft.FontWeight.BOLD,
+                                               color=ft.Colors.ORANGE_ACCENT), field], spacing=0, expand=True)],
+                           spacing=12),
+            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ORANGE), border_radius=10, padding=12,
+            border=ft.Border.all(1, ft.Colors.with_opacity(0.3, ft.Colors.ORANGE)),
+        )
 
-                    sub_dropdown = ft.Dropdown(
-                        value=sub_status,
-                        width=150,
-                        text_size=11,
-                        content_padding=5,
-                        options=[ft.DropdownOption(s) for s in TASK_STAGES],
-                        on_select=lambda e, sid=sub_id: self.on_subtask_status_change(sid, e.control.value)
-                    )
+    def _subquests_card(self, q):
+        qid = q["id"]
+        rows = []
+        for i, s in enumerate(q["subquests"]):
+            cb = ft.Checkbox(value=s["done"], label=s["title"],
+                             label_style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if s["done"] else None,
+                                                      color=ft.Colors.GREY_500 if s["done"] else ft.Colors.WHITE),
+                             on_change=lambda e, sid=s["id"]: self._toggle_sub(qid, sid, bool(e.control.value)),
+                             expand=True)
+            rows.append(ft.Row([
+                cb,
+                ft.Text(f"+{XP_SUBQUEST:g}", size=10, color=ft.Colors.GREY_600),
+                ft.IconButton(ft.Icons.EDIT, icon_size=14, tooltip="Rename",
+                              on_click=lambda e, sub=s: self._rename_sub(sub)),
+                ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=14, tooltip="Move step up", disabled=i == 0,
+                              on_click=lambda e, sid=s["id"]: (db.move_subquest(sid, "up"), self.render())),
+                ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=14, tooltip="Move step down",
+                              disabled=i == len(q["subquests"]) - 1,
+                              on_click=lambda e, sid=s["id"]: (db.move_subquest(sid, "down"), self.render())),
+                ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=16, icon_color=ft.Colors.RED_300, tooltip="Delete step",
+                              on_click=lambda e, sid=s["id"]: (db.delete_subquest(sid), self._changed())),
+            ], spacing=0))
+        new_f = ft.TextField(hint_text="Add a step…", dense=True, expand=True, text_size=13)
 
-                    sub_row = ft.Container(
-                        content=ft.Row([
-                            ft.Row([
-                                ft.Icon(
-                                    ft.Icons.CHECK_CIRCLE if sub_done else ft.Icons.RADIO_BUTTON_UNCHECKED,
-                                    size=16,
-                                    color=ft.Colors.GREEN_ACCENT if sub_done else sub_color
-                                ),
-                                ft.Text(
-                                    sub_title,
-                                    size=13,
-                                    color=ft.Colors.GREY_400 if sub_done else ft.Colors.WHITE,
-                                    style=ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if sub_done else ft.TextDecoration.NONE),
-                                    expand=True
-                                )
-                            ], expand=True),
-                            sub_dropdown,
-                            ft.Row([
-                                ft.IconButton(
-                                    icon=ft.Icons.ARROW_UPWARD,
-                                    icon_size=14,
-                                    icon_color=ft.Colors.GREY_500,
-                                    tooltip="Move Step Up",
-                                    on_click=lambda e, sid=sub_id: self.on_move_subtask(sid, "up")
-                                ),
-                                ft.IconButton(
-                                    icon=ft.Icons.ARROW_DOWNWARD,
-                                    icon_size=14,
-                                    icon_color=ft.Colors.GREY_500,
-                                    tooltip="Move Step Down",
-                                    on_click=lambda e, sid=sub_id: self.on_move_subtask(sid, "down")
-                                ),
-                                ft.IconButton(
-                                    icon=ft.Icons.DELETE_OUTLINE,
-                                    icon_size=16,
-                                    icon_color=ft.Colors.RED_300,
-                                    tooltip="Delete Step",
-                                    on_click=lambda e, sid=sub_id: self.on_delete_subtask(sid)
-                                )
-                            ], spacing=0)
-                        ]),
-                        bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
-                        border_radius=6,
-                        padding=ft.Padding.symmetric(horizontal=10, vertical=4)
-                    )
-                    sub_rows.append(sub_row)
+        def add(e=None):
+            if (new_f.value or "").strip():
+                db.add_subquest(qid, new_f.value.strip())
+                self._changed()
 
-                new_sub_input = ft.TextField(
-                    hint_text="Add milestone / step (e.g. -2kg, Coletar documentos, Preparar mapas)...",
-                    expand=True,
-                    dense=True,
-                    text_size=12
-                )
+        new_f.on_submit = add
+        if not rows:
+            rows.append(ft.Text("No steps yet. Break the quest into small actions — or let ✨ suggest some.",
+                                size=12, color=ft.Colors.GREY_500, italic=True))
+        if q["repeat"] != "none":
+            rows.insert(0, ft.Text(f"Steps reset {('every Monday' if q['repeat'] == 'weekly' else 'on the 1st of each month')}.",
+                                   size=11, color=ft.Colors.GREY_500))
+        suggest = ft.TextButton("Suggest steps", icon=ft.Icons.AUTO_AWESOME,
+                                on_click=lambda e: open_quest_planner(self.app_page, lambda _id: self._changed(),
+                                                                      existing=q))
+        return section(f"STEPS ({q['sub_done']}/{q['sub_total']})",
+                       rows + [ft.Row([new_f, ft.IconButton(ft.Icons.ADD, tooltip="Add step", on_click=add)])],
+                       trailing=suggest)
 
-                add_sub_bar = ft.Row([
-                    new_sub_input,
-                    ft.Button(
-                        content="Add Step",
-                        icon=ft.Icons.ADD,
-                        on_click=lambda e, tid=task_id, nsi=new_sub_input: self.on_add_subtask(tid, nsi)
-                    )
-                ], spacing=10)
+    def _toggle_sub(self, qid, sid, done):
+        xp = db.set_subquest_done(sid, done)
+        if xp:
+            self.feedback[qid] = f"Step done! +{xp:g} XP"
+        self._changed()
 
-                notes_field = ft.TextField(
-                    value=self.notes_drafts.get(task_id, notes),
-                    hint_text="Write notes, reference links, parts, notes, or ideas here...",
-                    multiline=True,
-                    min_lines=3,
-                    max_lines=10,
-                    text_size=13
-                )
-                def _on_notes_change(e, tid=task_id):
-                    self.notes_drafts[tid] = e.control.value
+    def _rename_sub(self, sub):
+        field = ft.TextField(value=sub["title"], autofocus=True, dense=True)
 
-                def _on_notes_blur(e, tid=task_id):
-                    db.save_task_notes_with_progress(tid, e.control.value)
-                    self.notes_drafts.pop(tid, None)
+        def save(e=None):
+            if (field.value or "").strip():
+                db.rename_subquest(sub["id"], field.value.strip())
+            self.app_page.pop_dialog()
+            self.render()
 
-                notes_field.on_change = _on_notes_change
-                notes_field.on_blur = _on_notes_blur
-                save_btn = ft.Button(content="Save Notes", icon=ft.Icons.SAVE)
-                save_btn.on_click = lambda e, tid=task_id, nf=notes_field, b=save_btn: self.save_notes_clicked(tid, nf.value, b)
+        field.on_submit = save
+        self.app_page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("Rename step"), content=ft.Container(field, width=420),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
+                     ft.Button("Save", on_click=save)]))
 
-                expanded_panel = ft.Container(
-                    content=ft.Column([
-                        ft.Divider(color=ft.Colors.GREY_800, height=1),
-                        ft.Text("SUBQUESTS & MILESTONES:", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
-                        ft.Column(sub_rows, spacing=4) if sub_rows else ft.Text("No subquests added yet. Add your first step below!", size=12, color=ft.Colors.GREY_500, italic=True),
-                        add_sub_bar,
-                        ft.Divider(color=ft.Colors.GREY_800, height=1),
-                        ft.Text("QUEST NOTEPAD:", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
-                        notes_field,
-                        ft.Row([
-                            save_btn,
-                            ft.Text(f"{len(notes)} characters saved", size=11, color=ft.Colors.GREY_500)
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                    ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
-                    padding=ft.Padding.only(left=35, right=15, top=5, bottom=12)
-                )
-                card_items.append(expanded_panel)
+    # ------------------------------------------------------------ measurable target
+    def _target_card(self, q):
+        qid = q["id"]
+        if not q["has_metric"]:
+            return section("TARGET", [
+                ft.Text("Is progress a number? (kg, books, km, money…) Track it here.", size=12,
+                        color=ft.Colors.GREY_500),
+                ft.Row([ft.TextButton("Add a measurable target", icon=ft.Icons.ADD_CHART,
+                                      on_click=lambda e: self._edit_target(q))]),
+            ])
+        values = [e for e in reversed(db.get_quest_log(qid)) if e["value"] is not None][-12:]
+        summary = ft.Row([
+            ft.Column([ft.Text("START", size=10, color=ft.Colors.GREY_500),
+                       ft.Text(f"{fmt_num(q['metric_start'])} {q['metric_unit']}", size=15)], spacing=0),
+            ft.Icon(ft.Icons.ARROW_FORWARD, color=ft.Colors.GREY_600, size=16),
+            ft.Column([ft.Text("NOW", size=10, color=ft.Colors.GREY_500),
+                       ft.Text(f"{fmt_num(q['metric_current'])} {q['metric_unit']}", size=18,
+                               weight=ft.FontWeight.BOLD, color=GOLD)], spacing=0),
+            ft.Icon(ft.Icons.ARROW_FORWARD, color=ft.Colors.GREY_600, size=16),
+            ft.Column([ft.Text("TARGET", size=10, color=ft.Colors.GREY_500),
+                       ft.Text(f"{fmt_num(q['metric_target'])} {q['metric_unit']}", size=15)], spacing=0),
+            ft.Container(expand=True),
+            ft.Text(f"{q['metric_pct']:.0f}%", size=18, weight=ft.FontWeight.BOLD),
+        ], spacing=12)
+        controls = [summary]
+        if values:
+            controls.append(ft.Container(content=self._metric_chart(q, values), height=170))
+        else:
+            controls.append(ft.Text("Log your first value below to start the chart.", size=12, color=ft.Colors.GREY_500))
+        if q["status"] != "Complete":
+            value_f = ft.TextField(label=f"New value ({q['metric_unit']})", dense=True, width=170)
+            note_f = ft.TextField(label="Note (optional)", dense=True, expand=True)
+            error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
-            quest_card = ft.Container(
-                content=ft.Column(card_items, spacing=4),
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST if not is_complete else ft.Colors.with_opacity(0.05, ft.Colors.GREEN),
-                border=ft.Border.all(1, ft.Colors.CYAN_ACCENT) if is_expanded else None,
-                border_radius=8,
-                padding=ft.Padding.symmetric(horizontal=15, vertical=8),
-                margin=ft.Margin.symmetric(horizontal=20, vertical=4)
-            )
+            def log_value(e=None):
+                value = parse_number(value_f.value)
+                if value is None:
+                    error.value = "Type a number."
+                    self._update()
+                    return
+                xp = db.add_quest_log(qid, (note_f.value or "").strip(), value=value)
+                self.feedback[qid] = f"Logged {fmt_num(value)} {q['metric_unit']}" + (f" • +{xp:g} XP" if xp else "")
+                self._changed()
 
-            self.controls.append(quest_card)
+            value_f.on_submit = log_value
+            controls += [ft.Row([value_f, note_f, ft.Button("Log value", icon=ft.Icons.ADD, on_click=log_value)],
+                                spacing=8), error]
+        edit = ft.TextButton("Edit target", icon=ft.Icons.TUNE, on_click=lambda e: self._edit_target(q))
+        return section("TARGET", controls, trailing=edit)
 
-        if self.app_page:
-            self.app_page.update()
+    def _metric_chart(self, q, values):
+        nums = [e["value"] for e in values] + [q["metric_start"], q["metric_target"]]
+        lo, hi = min(nums), max(nums)
+        pad = max((hi - lo) * 0.15, 1.0)
+        y_min, y_max = math.floor(lo - pad), math.ceil(hi + pad)
+        step = max(1, math.ceil((y_max - y_min) / 4))
+        increasing = q["metric_target"] >= q["metric_start"]
+        groups = []
+        for i, e in enumerate(values):
+            good = e["value"] >= q["metric_start"] if increasing else e["value"] <= q["metric_start"]
+            groups.append(fch.BarChartGroup(x=i, rods=[fch.BarChartRod(
+                from_y=y_min, to_y=e["value"], width=22, color=ft.Colors.GREEN_ACCENT if good else ft.Colors.ORANGE_ACCENT,
+                border_radius=ft.BorderRadius.all(3), tooltip=f"{fmt_num(e['value'])} {q['metric_unit']}")]))
+        return fch.BarChart(
+            groups=groups,
+            border=ft.Border.all(1, ft.Colors.GREY_800),
+            left_axis=fch.ChartAxis(labels=[fch.ChartAxisLabel(value=v, label=ft.Text(fmt_num(v), size=10))
+                                            for v in range(y_min, y_max + 1, step)], label_size=40),
+            bottom_axis=fch.ChartAxis(labels=[fch.ChartAxisLabel(value=i, label=ft.Text(e["entry_date"][8:10] + "/" +
+                                                                                         e["entry_date"][5:7], size=10))
+                                              for i, e in enumerate(values)], label_size=24),
+            horizontal_grid_lines=fch.ChartGridLines(color=ft.Colors.GREY_800, interval=step),
+            min_y=y_min, max_y=y_max, interactive=True, expand=True,
+        )
+
+    def _edit_target(self, q):
+        unit_f = ft.TextField(label="Unit (kg, books, km, R$…)", value=q["metric_unit"], dense=True)
+        start_f = ft.TextField(label="Start value", value=fmt_num(q["metric_start"]) if q["metric_start"] is not None
+                               else "", dense=True, width=150)
+        target_f = ft.TextField(label="Target value", value=fmt_num(q["metric_target"]) if q["metric_target"] is not None
+                                else "", dense=True, width=150)
+        error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
+
+        def save(e):
+            start, target = parse_number(start_f.value), parse_number(target_f.value)
+            if not (unit_f.value or "").strip() or start is None or target is None or start == target:
+                error.value = "Fill the unit and two different numbers."
+                self._update()
+                return
+            db.update_quest(q["id"], metric_unit=unit_f.value.strip(), metric_start=start, metric_target=target)
+            self.app_page.pop_dialog()
+            self._changed()
+
+        def remove(e):
+            db.update_quest(q["id"], metric_unit="", metric_start=None, metric_target=None)
+            self.app_page.pop_dialog()
+            self._changed()
+
+        actions = [ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
+                   ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]
+        if q["has_metric"]:
+            actions.insert(0, ft.TextButton("Remove target", icon=ft.Icons.DELETE_OUTLINE,
+                                            icon_color=ft.Colors.RED_300, on_click=remove))
+        self.app_page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("Measurable target", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=420, content=ft.Column([
+                ft.Text("Works both ways: 82 → 77 kg (going down) or 0 → 12 books (going up). "
+                        "Logged values keep their history.", size=12, color=ft.Colors.GREY_400),
+                unit_f, ft.Row([start_f, target_f], spacing=10), error],
+                spacing=12, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+            actions=actions))
+
+    # ------------------------------------------------------------ quest log
+    def _log_card(self, q):
+        qid = q["id"]
+        draft = self.drafts.setdefault(qid, {"text": "", "next_step": ""})
+        text_f = ft.TextField(value=draft["text"], label="What did you do? Progress, ideas, blockers…",
+                              multiline=True, min_lines=2, max_lines=8, text_size=13)
+        text_f.on_change = lambda e: draft.update(text=e.control.value or "")
+        next_f = ft.TextField(label="Next step (updates the bookmark)", value=draft["next_step"], dense=True)
+        next_f.on_change = lambda e: draft.update(next_step=e.control.value or "")
+        msg = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
+
+        def log(e):
+            text = (text_f.value or "").strip()
+            if not text:
+                msg.value = "Write something first."
+                self._update()
+                return
+            xp = db.add_quest_log(qid, text, next_step=(next_f.value or "").strip())
+            self.drafts.pop(qid, None)
+            self.feedback[qid] = f"Logged! +{xp:g} XP" if xp else (
+                f"Logged (write {db.QUEST_LOG_MIN_CHARS}+ characters to earn XP)." if len(text) < db.QUEST_LOG_MIN_CHARS
+                else "Logged (today's log XP for this quest already earned).")
+            self._changed()
+
+        entries = db.get_quest_log(qid)
+        entry_rows = [self._entry_row(q, en) for en in entries] or [
+            ft.Text("No entries yet — a line per session is enough.", size=12, color=ft.Colors.GREY_500, italic=True)]
+        controls = []
+        if q["status"] != "Complete":
+            controls += [text_f, ft.Row([ft.Container(content=next_f, expand=True),
+                                         ft.Button(f"Log (+{XP_QUEST_LOG:g} XP)", icon=ft.Icons.ADD, on_click=log)],
+                                        spacing=8), msg]
+        controls += entry_rows
+        return section(f"QUEST LOG ({len(entries)})", controls)
+
+    def _entry_row(self, q, en):
+        unit = q["metric_unit"]
+        head = [ft.Text(fmt_day(en["entry_date"]), size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_200,
+                        expand=True)]
+        if en["value"] is not None:
+            head.insert(1, badge(f"{fmt_num(en['value'])} {unit}".strip(), GOLD, size=11))
+        head += [
+            ft.IconButton(ft.Icons.EDIT, icon_size=14, tooltip="Edit entry", on_click=lambda e: self._edit_entry(q, en)),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=14, icon_color=ft.Colors.RED_300, tooltip="Delete entry",
+                          on_click=lambda e: confirm_action(self.app_page, "Delete log entry?",
+                                                            f"The entry from {fmt_day(en['entry_date'])} will be removed.",
+                                                            lambda: (db.delete_quest_log(en["id"]), self._changed()))),
+        ]
+        lines = [ft.Row(head, spacing=6)]
+        if en["text"]:
+            lines.append(ft.Text(en["text"], size=13, selectable=True))
+        return ft.Container(content=ft.Column(lines, spacing=2), bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
+                            border_radius=8, padding=ft.Padding.only(left=10, right=4, top=2, bottom=8))
+
+    def _edit_entry(self, q, en):
+        text_f = ft.TextField(label="Entry", value=en["text"], multiline=True, min_lines=3, max_lines=10)
+        value_f = ft.TextField(label=f"Value ({q['metric_unit']})", value=fmt_num(en["value"]) if en["value"] is not None
+                               else "", dense=True, width=160, visible=q["has_metric"] or en["value"] is not None)
+        date_f = ft.TextField(label="Date", value=f"{date.fromisoformat(en['entry_date']):%d/%m/%Y}", dense=True,
+                              width=140)
+        error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
+
+        def save(e):
+            d = db.parse_flexible_date(date_f.value or "")
+            value = parse_number(value_f.value) if (value_f.value or "").strip() else None
+            if not d or ((value_f.value or "").strip() and value is None) or \
+                    (not (text_f.value or "").strip() and value is None):
+                error.value = "Check the date (DD/MM/YYYY), the value, and that the entry isn't empty."
+                self._update()
+                return
+            db.update_quest_log(en["id"], (text_f.value or "").strip(), value, d.isoformat())
+            self.app_page.pop_dialog()
+            self._changed()
+
+        self.app_page.show_dialog(ft.AlertDialog(
+            modal=True, title=ft.Text("Edit log entry", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=500, content=ft.Column([text_f, ft.Row([value_f, date_f], spacing=10), error],
+                                                              spacing=12, tight=True,
+                                                              horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
+                     ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]))
+
+    # ------------------------------------------------------------ description
+    def _description_card(self, q):
+        field = ft.TextField(value=q["notes"], hint_text="Why this quest matters, links, references, ideas…",
+                             multiline=True, min_lines=3, max_lines=None, text_size=13)
+        field.on_blur = lambda e: self._save(q["id"], notes=e.control.value or "") \
+            if (e.control.value or "") != q["notes"] else None
+        return section("DESCRIPTION & NOTES", [field], color=ft.Colors.GREY_400)

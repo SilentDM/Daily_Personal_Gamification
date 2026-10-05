@@ -19,17 +19,20 @@ CATEGORIES = ["Health", "Study", "Routine", "Vice / Avoid"]
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-TASK_STAGES = ["Planning", "Started", "In Progress", "Almost There", "Complete"]
-
-# Quest Bonus XP (matches the 1-100 level discipline scale)
 # XP awarded per source (single source of truth, used by database.py and the views)
-XP_QUEST = 15
+XP_QUEST = 15        # a "Normal" quest
 XP_STUDY = 15
 XP_EVENT = 10
-XP_NOTE_PROGRESS = 2.0
 XP_STUDY_LOG = 2.0   # first journal entry of the day per chapter
 XP_REVIEW = 5        # each spaced-repetition review completed
-QUEST_BONUS_XP = XP_QUEST  # alias kept for todo_view
+XP_SUBQUEST = 2.0    # each subquest checked off
+XP_QUEST_LOG = 2.0   # first quest log entry of the day per quest
+
+# Quests: no deadlines on purpose — nothing can be "late"; quests can be put on hold
+QUEST_TYPES = ["Main", "Side", "Epic"]
+QUEST_DIFFICULTY_XP = {"Easy": 10, "Normal": XP_QUEST, "Hard": 30, "Epic": 60}
+QUEST_REPEATS = ["none", "weekly", "monthly"]
+QUEST_STATUSES = ["Active", "On hold", "Complete"]
 
 # Study chapters: stages and spaced-repetition review days (counted from mastery)
 STUDY_STAGES = ["Not started", "Studying", "Reviewing", "Mastered"]

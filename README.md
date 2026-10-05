@@ -22,8 +22,9 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Streak Counter (🔥):** Tracks consecutive days maintaining a daily average score $\ge 7.0$.
 * **XP Ledger:** Every XP gain is recorded once in an immutable ledger, so your level never shifts retroactively:
   * **Habit day:** `(daily average − 5) × 2` (a bad day costs XP, a perfect day gives +10).
-  * **Quest completed:** +15 XP · **Study chapter mastered:** +15 XP · **Calendar event done:** +10 XP.
-  * **Quest notes progress:** +2 XP when notes grow by 10+ characters (15 min cooldown).
+  * **Quest completed:** by difficulty — Easy +10 · Normal +15 · Hard +30 · Epic +60 XP (repeatable quests: once per week/month).
+  * **Subquest checked:** +2 XP · **Quest log:** +2 XP for the first real entry of the day per quest.
+  * **Study chapter mastered:** +15 XP · **Calendar event done:** +10 XP.
   * **Study journal:** +2 XP for the first real entry (20+ characters) of the day per chapter · **Study review:** +5 XP each.
 * **Levels 1–100:** One level every 10 XP, max level at 1,000 XP.
 * **Rank Titles:** **Novice** $\rightarrow$ **Apprentice** (16) $\rightarrow$ **Disciplined** (36) $\rightarrow$ **Elite** (61) $\rightarrow$ **Master** (81) $\rightarrow$ **Centurion** (100).
@@ -37,7 +38,12 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Hero vs. Nemesis Habit:** Identifies your strongest habit vs. the activity needing the most focus.
 
 ### 🗺️ 4. Quests, Study, Calendar & Documents
-* **Quests:** Main quests with weighted subquests (Planning → Complete), progress bars and a notepad.
+* **Quests:** an RPG quest log — **no deadlines on purpose**: nothing can be late; quests can be put **On hold**.
+  * **Main / Side / Epic** quests with **Easy / Normal / Hard / Epic** difficulty (the XP reward).
+  * **Checkbox steps**, a dated **quest log** with a "next step" bookmark, and a description box.
+  * **Measurable targets** (optional): start → target with a unit (e.g. 82 → 77 kg); log values and see a chart.
+  * **Repeatable quests** (weekly / monthly): complete once per period; steps reset; skipping a period costs nothing.
+  * **Hall of Fame** for completed quests, and an **AI quest planner** (✨, Gemini): describe a goal and get type, difficulty, steps, a first step and an optional target to edit before saving.
 * **Study:** chapters move through **Not started → Studying → Reviewing → Mastered**.
   * **Journal** while you study: log each session (notes, time spent, date) and keep a "where I stopped / next step" bookmark.
   * **Wrap-up** to finish: the "Proof of Work" template (ELI5, toy sandbox, break-it test, recall flashcards) with a completion checklist.
@@ -74,7 +80,7 @@ Daily_Personal_Gamification/
 ├── updater.py          # git fast-forward auto-update on launch
 ├── schedule_view.py    # Weekly habit grid and gamification banner
 ├── graphs_view.py      # Analytics dashboard, KPI cards and charts
-├── todo_view.py        # Quests and subquests
+├── todo_view.py        # Quest log: steps, quest log, targets, repeats, Hall of Fame, AI planner
 ├── study_view.py       # Study chapters: journal, wrap-up, reviews, AI settings
 ├── calendar_view.py    # Calendar and events
 ├── documents_view.py   # Personal documents vault
@@ -82,6 +88,7 @@ Daily_Personal_Gamification/
 ├── wallpaper_view.py   # HUD settings screen
 ├── ai_gemini.py        # Small Gemini client: key in Credential Manager, model fallback
 ├── ai_review.py        # AI deep reviews: review packs and answer grading
+├── ai_quest.py         # AI quest planner (no dates or deadlines)
 ├── ui_helpers.py       # Shared confirmation dialog
 ├── tests/              # Database and AI tests (unittest, no network)
 ├── base_wallpaper.jpg  # Background image for the HUD

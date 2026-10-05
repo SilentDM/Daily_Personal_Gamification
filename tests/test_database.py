@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import database as db  # noqa: E402
 import secure  # noqa: E402
-from constants import XP_QUEST, XP_STUDY, XP_STUDY_LOG, XP_REVIEW, REVIEW_DAYS  # noqa: E402
+from constants import (XP_QUEST, XP_STUDY, XP_STUDY_LOG, XP_REVIEW, REVIEW_DAYS, XP_SUBQUEST,  # noqa: E402
+                       XP_QUEST_LOG, QUEST_DIFFICULTY_XP)
 
 
 class DbTestCase(unittest.TestCase):
@@ -84,23 +85,136 @@ class HabitXpTests(DbTestCase):
 
 
 class QuestTests(DbTestCase):
-    def test_quest_xp_awarded_once_and_removed_on_reopen(self):
-        t = db.add_task("Taxes")
-        db.set_task_manual_status(t, True)
-        db.set_task_manual_status(t, True)
-        self.assertAlmostEqual(self.xp(), XP_QUEST)
-        db.set_task_manual_status(t, False)
+    MON = date(2025, 6, 2)  # a Monday
+
+    def test_quest_xp_depends_on_difficulty_awarded_once_and_removed_on_reopen(self):
+        q = db.add_quest("Taxes", difficulty="Hard")
+        self.assertEqual(db.complete_quest(q), QUEST_DIFFICULTY_XP["Hard"])
+        self.assertEqual(db.complete_quest(q), 0.0)
+        self.assertAlmostEqual(self.xp(), QUEST_DIFFICULTY_XP["Hard"])
+        self.assertEqual(db.get_quest(q)["status"], "Complete")
+        db.set_quest_status(q, "Active")  # reopen
         self.assertAlmostEqual(self.xp(), 0.0)
 
-    def test_progress_comes_from_subquests(self):
-        t = db.add_task("Trip")
-        s1 = db.add_subtask(t, "Book flight")
-        db.add_subtask(t, "Book hotel")
-        db.update_subtask_status(s1, "Complete")
-        task = next(r for r in db.get_tasks() if r[0] == t)
-        self.assertEqual(task[2], "In Progress")
-        self.assertEqual(len(task[6]), 2)
-        self.assertAlmostEqual(task[7], 50.0)
+    def test_checkbox_subquests_give_xp_and_drive_progress(self):
+        q = db.add_quest("Trip", subquests=["Book flight", "Book hotel", ""])
+        subs = db.get_quest(q)["subquests"]
+        self.assertEqual([s["title"] for s in subs], ["Book flight", "Book hotel"])
+        self.assertEqual(db.set_subquest_done(subs[0]["id"], True), XP_SUBQUEST)
+        self.assertEqual(db.set_subquest_done(subs[0]["id"], True), 0.0)  # already checked
+        quest = db.get_quest(q)
+        self.assertEqual((quest["sub_done"], quest["sub_total"], quest["progress_pct"]), (1, 2, 50.0))
+        self.assertEqual(quest["status"], "Active")  # turning in is explicit
+        db.set_subquest_done(subs[0]["id"], False)
+        self.assertAlmostEqual(self.xp(), 0.0)
+
+    def test_measurable_target_works_for_decreasing_goals(self):
+        q = db.add_quest("Lose weight", metric_unit="kg", metric_start=82, metric_target=77)
+        self.assertEqual(db.get_quest(q)["progress_pct"], 0.0)
+        db.add_quest_log(q, "weekly weigh-in", value=80, entry_date="2025-06-01")
+        db.add_quest_log(q, value=79.5, entry_date="2025-06-08")
+        quest = db.get_quest(q)
+        self.assertEqual(quest["metric_current"], 79.5)
+        self.assertAlmostEqual(quest["metric_pct"], 50.0)
+        db.add_quest_log(q, value=76, entry_date="2025-06-20")  # past the target -> capped
+        self.assertEqual(db.get_quest(q)["metric_pct"], 100.0)
+
+    def test_progress_mixes_subquests_and_target(self):
+        q = db.add_quest("Read", metric_unit="books", metric_start=0, metric_target=10, subquests=["List", "Buy"])
+        db.set_subquest_done(db.get_quest(q)["subquests"][0]["id"], True)
+        db.add_quest_log(q, value=5)
+        self.assertAlmostEqual(db.get_quest(q)["progress_pct"], 50.0)  # mean of 50% and 50%
+
+    def test_repeatable_quest_once_per_period_and_subquests_reset(self):
+        q = db.add_quest("Weekly review", repeat="weekly", subquests=["Inbox zero"])
+        sub = db.get_quest(q, on=self.MON)["subquests"][0]["id"]
+        db.set_subquest_done(sub, True, on=self.MON)
+        self.assertEqual(db.complete_quest(q, on=self.MON + timedelta(days=2)), XP_QUEST)
+        self.assertEqual(db.complete_quest(q, on=self.MON + timedelta(days=3)), 0.0)  # same week
+        quest = db.get_quest(q, on=self.MON + timedelta(days=3))
+        self.assertTrue(quest["done_this_period"])
+        self.assertEqual(quest["status"], "Active")
+        next_week = db.get_quest(q, on=self.MON + timedelta(days=7))
+        self.assertFalse(next_week["done_this_period"])
+        self.assertFalse(next_week["subquests"][0]["done"])  # reset for the new week
+        self.assertEqual(db.complete_quest(q, on=self.MON + timedelta(days=8)), XP_QUEST)
+        self.assertEqual(db.get_quest(q, on=self.MON + timedelta(days=8))["times_completed"], 2)
+        self.assertAlmostEqual(self.xp(), XP_SUBQUEST + 2 * XP_QUEST)
+
+    def test_undo_repeatable_completion_only_this_period(self):
+        q = db.add_quest("Pay bills", repeat="monthly")
+        db.complete_quest(q, on=date(2025, 5, 3))
+        db.complete_quest(q, on=date(2025, 6, 3))
+        db.undo_quest_completion(q, on=date(2025, 6, 10))
+        self.assertEqual(db.get_quest(q, on=date(2025, 6, 10))["times_completed"], 1)
+        self.assertAlmostEqual(self.xp(), XP_QUEST)
+
+    def test_periods_and_next_availability(self):
+        self.assertEqual(db.quest_period_key("weekly", date(2025, 12, 31)), "2026-W01")
+        self.assertEqual(db.quest_period_key("monthly", date(2025, 12, 31)), "2025-12")
+        self.assertEqual(db.next_period_start("weekly", date(2025, 6, 4)), date(2025, 6, 9))
+        self.assertEqual(db.next_period_start("monthly", date(2025, 12, 15)), date(2026, 1, 1))
+
+    def test_quest_log_xp_once_per_day_for_real_entries(self):
+        q = db.add_quest("Taxes")
+        self.assertEqual(db.add_quest_log(q, "ok", entry_date="2025-06-02"), 0.0)
+        self.assertEqual(db.add_quest_log(q, "Collected all receipts", next_step="Fill the form",
+                                          entry_date="2025-06-02"), XP_QUEST_LOG)
+        self.assertEqual(db.add_quest_log(q, "Started filling the form", entry_date="2025-06-02"), 0.0)
+        self.assertEqual(db.get_quest(q)["next_step"], "Fill the form")
+        entry = [e for e in db.get_quest_log(q) if e["text"] == "Collected all receipts"][0]
+        db.delete_quest_log(entry["id"])
+        self.assertAlmostEqual(self.xp(), XP_QUEST_LOG)  # "Started filling..." still qualifies
+
+    def test_on_hold_and_order(self):
+        a, b, c = (db.add_quest(t) for t in ("A", "B", "C"))
+        db.set_quest_status(b, "On hold")
+        db.move_quest(c, "up")
+        self.assertEqual([q["title"] for q in db.get_quests()], ["C", "A", "B"])
+        self.assertEqual([q["title"] for q in db.get_quests(statuses=("On hold",))], ["B"])
+
+    def test_week_stats_count_one_off_and_repeatable(self):
+        a = db.add_quest("One-off", difficulty="Easy")
+        r = db.add_quest("Weekly", repeat="weekly")
+        db.complete_quest(a, on=self.MON)
+        db.complete_quest(r, on=self.MON + timedelta(days=1))
+        count, xp = db.get_quest_week_stats(2025, 23)
+        self.assertEqual(count, 2)
+        self.assertAlmostEqual(xp, QUEST_DIFFICULTY_XP["Easy"] + XP_QUEST)
+
+    def test_update_rejects_unknown_fields(self):
+        q = db.add_quest("X")
+        with self.assertRaises(ValueError):
+            db.update_quest(q, status="Complete")
+        with self.assertRaises(ValueError):
+            db.set_quest_status(q, "Complete")
+
+    def test_old_quests_are_migrated(self):
+        old = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, old, True)
+        with mock.patch.dict(os.environ, {"APPDATA": old}):
+            conn = db.get_connection()
+            conn.execute("""CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+                status TEXT DEFAULT 'Planning', notes TEXT DEFAULT '', sort_order INTEGER DEFAULT 0,
+                completed_year INTEGER, completed_week INTEGER, completed_at TIMESTAMP, active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("""CREATE TABLE subtasks (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
+                title TEXT NOT NULL, status TEXT DEFAULT 'Planning', sort_order INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("INSERT INTO tasks (title, status, notes) VALUES ('Old quest', 'Almost There', 'my notes')")
+            conn.execute("INSERT INTO tasks (title, status, completed_at) VALUES ('Done quest', 'Complete', "
+                         "'2025-01-05 10:00:00')")
+            conn.execute("INSERT INTO subtasks (task_id, title, status) VALUES (1, 'Step done', 'Complete')")
+            conn.execute("INSERT INTO subtasks (task_id, title, status) VALUES (1, 'Step half', 'In Progress')")
+            conn.commit()
+            conn.close()
+            db.init_db()
+            by_title = {q["title"]: q for q in db.get_quests()}
+            old_q = by_title["Old quest"]
+            self.assertEqual((old_q["status"], old_q["notes"], old_q["difficulty"], old_q["quest_type"],
+                              old_q["repeat"], old_q["sub_done"], old_q["sub_total"]),
+                             ("Active", "my notes", "Normal", "Main", "none", 1, 2))
+            self.assertEqual(by_title["Done quest"]["status"], "Complete")
 
 
 class CalendarTests(DbTestCase):

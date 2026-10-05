@@ -95,10 +95,10 @@ def render_wallpaper():
         today_avg = (sum(today_scores) / len(today_scores)) if today_scores else 0.0
 
         # Quests
-        tasks = db.get_tasks()
+        quests = db.get_quests(statuses=("Active",))
         active_quests = [
-            f"{t[1]} ({int(t[7])}%)" if t[7] > 0 else t[1]
-            for t in tasks if t[2] != "Complete"][:3]
+            f"{q['title']} ({int(q['progress_pct'])}%)" if q["progress_pct"] > 0 else q["title"]
+            for q in quests if not q["done_this_period"]][:3]
         
         # Active study chapters (with where I stopped) and spaced-repetition reviews due
         study_sessions = db.get_study_sessions()

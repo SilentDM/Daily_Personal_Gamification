@@ -3,8 +3,9 @@ import calendar as _calendar
 import secure
 from pathlib import Path
 from datetime import datetime, date, timedelta
-from constants import (get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, XP_NOTE_PROGRESS, SCORE_PASSING,
-                       XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS)
+from constants import (get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, SCORE_PASSING,
+                       XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS,
+                       XP_SUBQUEST, XP_QUEST_LOG, QUEST_DIFFICULTY_XP)
 
 def get_db_path():
     app_data = os.getenv("APPDATA")
@@ -172,6 +173,7 @@ def init_db():
     _run_v2_migrations(conn)
     _run_calendar_migrations(conn)
     _run_study_migrations(conn)
+    _run_quest_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -397,304 +399,423 @@ def get_weekly_insights(year: int, week: int):
         "nemesis_habit": nemesis
     }
 
-# --- Tasks / Quests Operations ---
-# --- Subquest Definitions and Operations ---
-SUBQUEST_WEIGHTS = {
-    "Planning": 0.0,
-    "Started": 25.0,
-    "In Progress": 50.0,
-    "Almost There": 75.0,
-    "Complete": 100.0
-}
+# --- Quests: types, difficulty XP, checkbox subquests, quest log, measurable targets, repeats ---
+# No deadlines on purpose: nothing can be "late". Quests can be put on hold instead.
+QUEST_FIELDS = ("id", "title", "status", "notes", "quest_type", "difficulty", "repeat", "metric_unit",
+                "metric_start", "metric_target", "next_step", "completed_at", "sort_order", "created_at")
+_EDITABLE_QUEST_FIELDS = {"title", "notes", "quest_type", "difficulty", "repeat", "metric_unit",
+                          "metric_start", "metric_target", "next_step"}
+QUEST_LOG_MIN_CHARS = 15  # a log entry this long (or any entry with a value) earns the daily log XP
 
-def get_subtasks(task_id: int):
-    """Fetches all active subquests for a given parent quest."""
+
+def quest_period_key(repeat: str, on: date = None) -> str:
+    """Completion period of a quest: 'done' (one-off), 'YYYY-Www' (weekly) or 'YYYY-MM' (monthly)."""
+    on = on or date.today()
+    if repeat == "weekly":
+        iso = on.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+    if repeat == "monthly":
+        return f"{on.year}-{on.month:02d}"
+    return "done"
+
+
+def next_period_start(repeat: str, on: date = None) -> date:
+    """When a repeatable quest becomes available again."""
+    on = on or date.today()
+    if repeat == "weekly":
+        return on + timedelta(days=7 - on.weekday())
+    if repeat == "monthly":
+        return date(on.year + (on.month == 12), on.month % 12 + 1, 1)
+    return on
+
+
+def quest_xp(difficulty: str) -> int:
+    return QUEST_DIFFICULTY_XP.get(difficulty, XP_QUEST)
+
+
+def _metric_progress(start, target, current):
+    if start is None or target is None or current is None:
+        return None
+    if target == start:
+        return 100.0 if current == target else 0.0
+    return max(0.0, min(100.0, (current - start) / (target - start) * 100.0))
+
+
+def get_quests(statuses=None, on: date = None):
+    """Quests as dicts (QUEST_FIELDS + computed progress), in display order.
+
+    Computed: subquests [{id, title, done, sort_order}], sub_done, sub_total, metric_current, metric_pct,
+    progress_pct, period_key, done_this_period, times_completed, xp_reward, log_count, last_log.
+    """
+    on = on or date.today()
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, title, status, sort_order 
-        FROM subtasks 
-        WHERE task_id = ? AND active = 1 
-        ORDER BY sort_order ASC, id ASC
-    """, (task_id,))
-    rows = cursor.fetchall()
+    rows = conn.execute(f"""
+        SELECT {', '.join(QUEST_FIELDS)} FROM tasks WHERE active = 1
+        ORDER BY CASE status WHEN 'Active' THEN 0 WHEN 'On hold' THEN 1 ELSE 2 END,
+                 CASE WHEN status = 'Complete' THEN completed_at END DESC, sort_order ASC, id ASC
+    """).fetchall()
+    subs = {}
+    for task_id, sid, title, done_key, order in conn.execute("""
+        SELECT task_id, id, title, COALESCE(done_key, ''), sort_order FROM subtasks
+        WHERE active = 1 ORDER BY sort_order ASC, id ASC
+    """):
+        subs.setdefault(task_id, []).append((sid, title, done_key, order))
+    logs = {r[0]: r[1:] for r in conn.execute("""
+        SELECT task_id, COUNT(*), MAX(entry_date) FROM quest_log GROUP BY task_id
+    """)}
+    values = {}
+    for task_id, value in conn.execute("""
+        SELECT task_id, value FROM quest_log WHERE value IS NOT NULL ORDER BY entry_date ASC, id ASC
+    """):
+        values[task_id] = value  # last one wins = latest value
+    completions = {}
+    for task_id, period in conn.execute("SELECT task_id, period_key FROM quest_completions"):
+        completions.setdefault(task_id, set()).add(period)
     conn.close()
-    return rows
 
-def add_subtask(task_id: int, title: str, status: str = "Planning"):
-    """Adds a new subquest to a main quest."""
+    quests = []
+    for r in rows:
+        q = dict(zip(QUEST_FIELDS, r))
+        q["notes"] = q["notes"] or ""
+        q["next_step"] = q["next_step"] or ""
+        q["metric_unit"] = q["metric_unit"] or ""
+        q["repeat"] = q["repeat"] or "none"
+        q["quest_type"] = q["quest_type"] or "Main"
+        q["difficulty"] = q["difficulty"] or "Normal"
+        if statuses and q["status"] not in statuses:
+            continue
+        key = quest_period_key(q["repeat"], on)
+        q["period_key"] = key
+        q["subquests"] = [{"id": sid, "title": title, "done": done_key == key, "sort_order": order}
+                          for sid, title, done_key, order in subs.get(q["id"], [])]
+        q["sub_total"] = len(q["subquests"])
+        q["sub_done"] = sum(1 for s in q["subquests"] if s["done"])
+        q["has_metric"] = q["metric_target"] is not None and q["repeat"] == "none"
+        q["metric_current"] = values.get(q["id"], q["metric_start"]) if q["has_metric"] else None
+        q["metric_pct"] = _metric_progress(q["metric_start"], q["metric_target"], q["metric_current"]) \
+            if q["has_metric"] else None
+        q["times_completed"] = len(completions.get(q["id"], ())) if q["repeat"] != "none" else \
+            (1 if q["status"] == "Complete" else 0)
+        q["done_this_period"] = key in completions.get(q["id"], ()) if q["repeat"] != "none" else \
+            q["status"] == "Complete"
+        q["xp_reward"] = quest_xp(q["difficulty"])
+        q["log_count"], q["last_log"] = logs.get(q["id"], (0, ""))
+        parts = []
+        if q["sub_total"]:
+            parts.append(q["sub_done"] / q["sub_total"] * 100.0)
+        if q["metric_pct"] is not None:
+            parts.append(q["metric_pct"])
+        if q["done_this_period"]:
+            q["progress_pct"] = 100.0
+        else:
+            q["progress_pct"] = sum(parts) / len(parts) if parts else 0.0
+        quests.append(q)
+    return quests
+
+
+def get_quest(quest_id: int, on: date = None):
+    return next((q for q in get_quests(on=on) if q["id"] == quest_id), None)
+
+
+def add_quest(title: str, quest_type: str = "Main", difficulty: str = "Normal", repeat: str = "none",
+              notes: str = "", metric_unit: str = "", metric_start=None, metric_target=None,
+              next_step: str = "", subquests=()) -> int:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM subtasks WHERE task_id = ? AND active = 1", (task_id,))
-    next_order = cursor.fetchone()[0]
+    next_order = cursor.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks WHERE active = 1").fetchone()[0]
     cursor.execute("""
-        INSERT INTO subtasks (task_id, title, status, sort_order) 
-        VALUES (?, ?, ?, ?)
-    """, (task_id, title, status, next_order))
-    sub_id = cursor.lastrowid
+        INSERT INTO tasks (title, status, notes, quest_type, difficulty, repeat, metric_unit, metric_start,
+                           metric_target, next_step, sort_order)
+        VALUES (?, 'Active', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (title, notes, quest_type, difficulty, repeat, metric_unit, metric_start, metric_target, next_step,
+          next_order))
+    quest_id = cursor.lastrowid
+    for i, sub in enumerate(s for s in subquests if s and s.strip()):
+        cursor.execute("INSERT INTO subtasks (task_id, title, status, sort_order) VALUES (?, ?, 'Planning', ?)",
+                       (quest_id, sub.strip(), i + 1))
+    conn.commit()
+    conn.close()
+    return quest_id
+
+
+def update_quest(quest_id: int, **fields):
+    """Edits quest fields (see _EDITABLE_QUEST_FIELDS). Completion/status: use the functions below."""
+    unknown = set(fields) - _EDITABLE_QUEST_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown quest fields: {sorted(unknown)}")
+    if not fields:
+        return
+    conn = get_connection()
+    conn.execute(f"UPDATE tasks SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                 (*fields.values(), quest_id))
     conn.commit()
     conn.close()
 
-    year, week, _ = get_current_week_info()
-    recalculate_task_progress(task_id, year, week)
-    return sub_id
 
-def update_subtask_status(subtask_id: int, status: str):
-    """Updates the status of a subquest and auto-recalculates parent progress."""
+def set_quest_status(quest_id: int, status: str):
+    """Active <-> On hold, or reopen a completed one-off quest (removes its completion XP)."""
+    if status not in ("Active", "On hold"):
+        raise ValueError("Use complete_quest() to complete a quest")
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subtask_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return
-
-    task_id = row[0]
-    cursor.execute("UPDATE subtasks SET status = ? WHERE id = ?", (status, subtask_id))
+    row = cursor.execute("SELECT status FROM tasks WHERE id = ?", (quest_id,)).fetchone()
+    if row and row[0] == "Complete":
+        cursor.execute("UPDATE tasks SET completed_at = NULL, completed_year = NULL, completed_week = NULL "
+                       "WHERE id = ?", (quest_id,))
+        _ledger_clear(cursor, "quest", str(quest_id))
+    cursor.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, quest_id))
     conn.commit()
     conn.close()
 
-    year, week, _ = get_current_week_info()
-    recalculate_task_progress(task_id, year, week)
 
-def delete_subtask(subtask_id: int):
-    """Deactivates a subquest and updates parent progress."""
+def complete_quest(quest_id: int, on: date = None) -> float:
+    """Turns in a quest. One-off: Complete (Hall of Fame). Repeatable: done for this period.
+
+    Returns the XP awarded (0 if it was already done).
+    """
+    on = on or date.today()
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subtask_id,))
-    row = cursor.fetchone()
-    if row:
-        task_id = row[0]
-        cursor.execute("UPDATE subtasks SET active = 0 WHERE id = ?", (subtask_id,))
-        conn.commit()
-        year, week, _ = get_current_week_info()
-        recalculate_task_progress(task_id, year, week)
-    conn.close()
-
-def move_subtask(subtask_id: int, direction: str):
-    """Moves a subquest up or down inside its parent quest."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subtask_id,))
-    row = cursor.fetchone()
+    row = cursor.execute("SELECT status, difficulty, COALESCE(repeat, 'none') FROM tasks WHERE id = ?",
+                         (quest_id,)).fetchone()
     if not row:
         conn.close()
+        return 0.0
+    status, difficulty, repeat = row
+    xp = float(quest_xp(difficulty))
+    if repeat == "none":
+        if status == "Complete":
+            conn.close()
+            return 0.0
+        iso = on.isocalendar()
+        cursor.execute("""
+            UPDATE tasks SET status = 'Complete', completed_at = ?, completed_year = ?, completed_week = ?
+            WHERE id = ?
+        """, (f"{on.isoformat()} {datetime.now():%H:%M:%S}", iso[0], iso[1], quest_id))
+        _ledger_set(cursor, "quest", str(quest_id), on.isoformat(), xp, replace=False)
+    else:
+        key = quest_period_key(repeat, on)
+        cursor.execute("INSERT OR IGNORE INTO quest_completions (task_id, period_key, completed_on, xp) "
+                       "VALUES (?, ?, ?, ?)", (quest_id, key, on.isoformat(), xp))
+        if cursor.rowcount == 0:
+            conn.close()
+            return 0.0
+        _ledger_set(cursor, "quest", f"{quest_id}:{key}", on.isoformat(), xp, replace=False)
+    conn.commit()
+    conn.close()
+    return xp
+
+
+def undo_quest_completion(quest_id: int, on: date = None):
+    """Repeatable: un-does this period's completion. One-off: reopens the quest."""
+    on = on or date.today()
+    quest = get_quest(quest_id, on=on)
+    if not quest:
         return
+    if quest["repeat"] == "none":
+        set_quest_status(quest_id, "Active")
+        return
+    key = quest_period_key(quest["repeat"], on)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM quest_completions WHERE task_id = ? AND period_key = ?", (quest_id, key))
+    _ledger_clear(cursor, "quest", f"{quest_id}:{key}")
+    conn.commit()
+    conn.close()
 
-    task_id = row[0]
-    cursor.execute("""
-        SELECT id, sort_order 
-        FROM subtasks 
-        WHERE task_id = ? AND active = 1 
-        ORDER BY sort_order ASC, id ASC
-    """, (task_id,))
-    rows = cursor.fetchall()
 
-    idx = next((i for i, r in enumerate(rows) if r[0] == subtask_id), None)
-    if idx is not None:
-        swap_idx = idx - 1 if direction == "up" else idx + 1
-        if 0 <= swap_idx < len(rows):
-            curr_id, curr_order = rows[idx]
-            target_id, target_order = rows[swap_idx]
+def delete_quest(quest_id: int):
+    conn = get_connection()
+    conn.execute("UPDATE tasks SET active = 0 WHERE id = ?", (quest_id,))
+    conn.commit()
+    conn.close()
 
-            if curr_order == target_order:
-                for i, r in enumerate(rows):
-                    cursor.execute("UPDATE subtasks SET sort_order = ? WHERE id = ?", (i, r[0]))
-                curr_order = idx
-                target_order = swap_idx
 
-            cursor.execute("UPDATE subtasks SET sort_order = ? WHERE id = ?", (target_order, curr_id))
-            cursor.execute("UPDATE subtasks SET sort_order = ? WHERE id = ?", (curr_order, target_id))
+def _swap_sort_order(cursor, table: str, rows, item_id: int, direction: str) -> bool:
+    """Swaps item_id with its neighbour in `rows` [(id, sort_order)]; renumbers when orders collide."""
+    idx = next((i for i, r in enumerate(rows) if r[0] == item_id), None)
+    if idx is None:
+        return False
+    swap = idx - 1 if direction == "up" else idx + 1
+    if not 0 <= swap < len(rows):
+        return False
+    (a_id, a_order), (b_id, b_order) = rows[idx], rows[swap]
+    if a_order == b_order:
+        for i, (rid, _) in enumerate(rows):
+            cursor.execute(f"UPDATE {table} SET sort_order = ? WHERE id = ?", (i, rid))
+        a_order, b_order = idx, swap
+    cursor.execute(f"UPDATE {table} SET sort_order = ? WHERE id = ?", (b_order, a_id))
+    cursor.execute(f"UPDATE {table} SET sort_order = ? WHERE id = ?", (a_order, b_id))
+    return True
+
+
+def move_quest(quest_id: int, direction: str):
+    """Moves a quest up/down among the quests with the same status."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    status = cursor.execute("SELECT status FROM tasks WHERE id = ?", (quest_id,)).fetchone()
+    if status:
+        rows = cursor.execute("SELECT id, sort_order FROM tasks WHERE active = 1 AND status = ? "
+                              "ORDER BY sort_order ASC, id ASC", (status[0],)).fetchall()
+        if _swap_sort_order(cursor, "tasks", rows, quest_id, direction):
             conn.commit()
     conn.close()
 
-def recalculate_task_progress(task_id: int, year: int, week: int):
-    """Automatically marks parent quest complete if all subquests are complete."""
-    subtasks = get_subtasks(task_id)
-    if not subtasks:
-        update_task_status(task_id, "Planning", year, week)
-        return
 
-    total_weight = sum(SUBQUEST_WEIGHTS.get(s[2], 0.0) for s in subtasks)
-    progress_pct = total_weight / len(subtasks)
-
-    if progress_pct >= 99.9:
-        update_task_status(task_id, "Complete", year, week)
-    else:
-        update_task_status(task_id, "In Progress" if progress_pct > 0 else "Planning", year, week)
-def get_tasks():
-    """
-    Returns tasks with their subquests and calculated progress percentage.
-    Format: (id, title, status, completed_year, completed_week, notes, subtasks, progress_pct)
-    """
+def add_subquest(quest_id: int, title: str) -> int:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, title, status, completed_year, completed_week, COALESCE(notes, '') 
-        FROM tasks 
-        WHERE active = 1 
-        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, sort_order ASC, id DESC
-    """)
-    rows = cursor.fetchall()
-    subs_by_task = {}
-    for task_id, *sub in cursor.execute("""
-        SELECT task_id, id, title, status, sort_order
-        FROM subtasks
-        WHERE active = 1
-        ORDER BY sort_order ASC, id ASC
-    """):
-        subs_by_task.setdefault(task_id, []).append(tuple(sub))
-    conn.close()
-
-    result = []
-    for r in rows:
-        task_id = r[0]
-        status = r[2]
-        subtasks = subs_by_task.get(task_id, [])
-
-        if subtasks:
-            total_weight = sum(SUBQUEST_WEIGHTS.get(s[2], 0.0) for s in subtasks)
-            progress_pct = total_weight / len(subtasks)
-        else:
-            progress_pct = 100.0 if status == "Complete" else 0.0
-
-        result.append((r[0], r[1], r[2], r[3], r[4], r[5], subtasks, progress_pct))
-
-    return result
-
-def add_task(title: str, status: str = "Planning"):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks WHERE active = 1")
-    next_order = cursor.fetchone()[0]
-    cursor.execute("INSERT INTO tasks (title, status, sort_order) VALUES (?, ?, ?)", (title, status, next_order))
-    task_id = cursor.lastrowid
+    next_order = cursor.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM subtasks "
+                                "WHERE task_id = ? AND active = 1", (quest_id,)).fetchone()[0]
+    cursor.execute("INSERT INTO subtasks (task_id, title, status, sort_order) VALUES (?, ?, 'Planning', ?)",
+                   (quest_id, title, next_order))
+    sub_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return task_id
+    return sub_id
 
-def update_task_status(task_id: int, status: str, year: int, week: int):
+
+def set_subquest_done(subquest_id: int, done: bool, on: date = None) -> float:
+    """Checks / unchecks a subquest (+XP_SUBQUEST; repeatable quests reset every period)."""
+    on = on or date.today()
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
-    if row and row[0] == status:
+    row = cursor.execute("""
+        SELECT COALESCE(t.repeat, 'none'), COALESCE(s.done_key, '') FROM subtasks s
+        JOIN tasks t ON t.id = s.task_id WHERE s.id = ?
+    """, (subquest_id,)).fetchone()
+    if not row:
         conn.close()
-        return  # nothing changed: keeps completed_week and never double-awards XP
-
-    if status == "Complete":
-        cursor.execute("""
-            UPDATE tasks
-            SET status = ?, completed_year = ?, completed_week = ?, completed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (status, year, week, task_id))
-        _ledger_set(cursor, "quest", str(task_id), date.today().isoformat(), XP_QUEST, replace=False)
+        return 0.0
+    key = quest_period_key(row[0], on)
+    ref = f"{subquest_id}:{key}"
+    gained = 0.0
+    if done:
+        cursor.execute("UPDATE subtasks SET done_key = ?, status = 'Complete' WHERE id = ?", (key, subquest_id))
+        if row[1] != key:
+            _ledger_set(cursor, "subquest", ref, on.isoformat(), XP_SUBQUEST, replace=False)
+            gained = float(XP_SUBQUEST)
     else:
-        cursor.execute("""
-            UPDATE tasks
-            SET status = ?, completed_year = NULL, completed_week = NULL, completed_at = NULL
-            WHERE id = ?
-        """, (status, task_id))
-        _ledger_clear(cursor, "quest", str(task_id))
+        cursor.execute("UPDATE subtasks SET done_key = '', status = 'Planning' WHERE id = ?", (subquest_id,))
+        _ledger_clear(cursor, "subquest", ref)
+    conn.commit()
+    conn.close()
+    return gained
+
+
+def rename_subquest(subquest_id: int, title: str):
+    conn = get_connection()
+    conn.execute("UPDATE subtasks SET title = ? WHERE id = ?", (title, subquest_id))
     conn.commit()
     conn.close()
 
-def delete_task(task_id: int):
+
+def delete_subquest(subquest_id: int):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE tasks SET active = 0 WHERE id = ?", (task_id,))
+    conn.execute("UPDATE subtasks SET active = 0 WHERE id = ?", (subquest_id,))
     conn.commit()
     conn.close()
 
-def move_task(task_id: int, direction: str):
-    """Moves a quest up or down among non-completed tasks (or among completed)."""
+
+def move_subquest(subquest_id: int, direction: str):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, sort_order, status 
-        FROM tasks 
-        WHERE active = 1 
-        ORDER BY CASE WHEN status = 'Complete' THEN 1 ELSE 0 END ASC, sort_order ASC, id DESC
-    """)
-    rows = cursor.fetchall()
-    
-    idx = next((i for i, r in enumerate(rows) if r[0] == task_id), None)
-    if idx is not None:
-        swap_idx = idx - 1 if direction == "up" else idx + 1
-        if 0 <= swap_idx < len(rows):
-            curr_is_complete = (rows[idx][2] == "Complete")
-            swap_is_complete = (rows[swap_idx][2] == "Complete")
-
-            # Allows swapping between any active quests regardless of 'Started' vs 'Planning'
-            if curr_is_complete == swap_is_complete:
-                curr_id, curr_order, _ = rows[idx]
-                target_id, target_order, _ = rows[swap_idx]
-
-                if curr_order == target_order:
-                    for i, r in enumerate(rows):
-                        cursor.execute("UPDATE tasks SET sort_order = ? WHERE id = ?", (i, r[0]))
-                    curr_order = idx
-                    target_order = swap_idx
-
-                cursor.execute("UPDATE tasks SET sort_order = ? WHERE id = ?", (target_order, curr_id))
-                cursor.execute("UPDATE tasks SET sort_order = ? WHERE id = ?", (curr_order, target_id))
-                conn.commit()
+    row = cursor.execute("SELECT task_id FROM subtasks WHERE id = ?", (subquest_id,)).fetchone()
+    if row:
+        rows = cursor.execute("SELECT id, sort_order FROM subtasks WHERE task_id = ? AND active = 1 "
+                              "ORDER BY sort_order ASC, id ASC", (row[0],)).fetchall()
+        if _swap_sort_order(cursor, "subtasks", rows, subquest_id, direction):
+            conn.commit()
     conn.close()
 
-def save_task_notes_with_progress(task_id: int, new_notes: str) -> float:
-    """Saves notes and awards XP if content grew by at least 10 characters (15 min cooldown)."""
+
+def _refresh_quest_log_xp(cursor, quest_id: int, entry_date: str):
+    """One XP_QUEST_LOG per quest per day while a real entry exists that day."""
+    ref = f"{quest_id}:{entry_date}"
+    qualifies = cursor.execute("""
+        SELECT 1 FROM quest_log WHERE task_id = ? AND entry_date = ?
+          AND (value IS NOT NULL OR LENGTH(TRIM(text)) >= ?)
+    """, (quest_id, entry_date, QUEST_LOG_MIN_CHARS)).fetchone()
+    if qualifies:
+        _ledger_set(cursor, "quest_log", ref, entry_date, XP_QUEST_LOG, replace=False)
+    else:
+        _ledger_clear(cursor, "quest_log", ref)
+
+
+def get_quest_log(quest_id: int):
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT id, entry_date, text, value FROM quest_log WHERE task_id = ?
+        ORDER BY entry_date DESC, id DESC
+    """, (quest_id,)).fetchall()
+    conn.close()
+    return [{"id": r[0], "entry_date": r[1], "text": r[2] or "", "value": r[3]} for r in rows]
+
+
+def add_quest_log(quest_id: int, text: str = "", value=None, next_step: str = "", entry_date: str = None) -> float:
+    """Adds a progress entry (optionally a new target value). Returns the XP gained."""
+    entry_date = entry_date or date.today().isoformat()
+    ref = f"{quest_id}:{entry_date}"
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute("SELECT COALESCE(notes, '') FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
-    old_notes = row[0] if row else ""
-    cursor.execute("UPDATE tasks SET notes = ? WHERE id = ?", (new_notes, task_id))
-
-    xp_gained = 0.0
-    new_clean = new_notes.strip()
-    old_clean = old_notes.strip()
-
-    if len(new_clean) >= len(old_clean) + 10 and new_clean != old_clean:
-        cursor.execute(
-            "SELECT created_at FROM quest_progress_logs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
-            (task_id,),
-        )
-        last_log = cursor.fetchone()
-
-        can_award = True
-        if last_log and last_log[0]:
-            try:
-                last_time = datetime.strptime(last_log[0].split(".")[0], "%Y-%m-%d %H:%M:%S")
-                # created_at is CURRENT_TIMESTAMP (UTC), so compare against utcnow
-                if (datetime.utcnow() - last_time).total_seconds() < 900:
-                    can_award = False
-            except Exception:
-                can_award = True
-
-        if can_award:
-            xp_gained = XP_NOTE_PROGRESS
-            cursor.execute(
-                "INSERT INTO quest_progress_logs (task_id, xp_awarded) VALUES (?, ?)",
-                (task_id, xp_gained),
-            )
-            _ledger_set(cursor, "note", str(cursor.lastrowid), date.today().isoformat(),
-                        xp_gained, replace=False)
-
+    had = cursor.execute("SELECT 1 FROM xp_ledger WHERE source = 'quest_log' AND ref_key = ?", (ref,)).fetchone()
+    cursor.execute("INSERT INTO quest_log (task_id, entry_date, text, value) VALUES (?, ?, ?, ?)",
+                   (quest_id, entry_date, text, value))
+    if next_step.strip():
+        cursor.execute("UPDATE tasks SET next_step = ? WHERE id = ?", (next_step.strip(), quest_id))
+    _refresh_quest_log_xp(cursor, quest_id, entry_date)
+    has = cursor.execute("SELECT 1 FROM xp_ledger WHERE source = 'quest_log' AND ref_key = ?", (ref,)).fetchone()
     conn.commit()
     conn.close()
-    return xp_gained
+    return float(XP_QUEST_LOG) if has and not had else 0.0
 
-def get_weekly_completed_tasks_count(year: int, week: int):
+
+def update_quest_log(entry_id: int, text: str, value, entry_date: str):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT COUNT(*) FROM tasks 
-        WHERE active = 1 AND status = 'Complete' AND completed_year = ? AND completed_week = ?
-    """, (year, week))
-    count = cursor.fetchone()[0] or 0
+    old = cursor.execute("SELECT task_id, entry_date FROM quest_log WHERE id = ?", (entry_id,)).fetchone()
+    if old:
+        cursor.execute("UPDATE quest_log SET text = ?, value = ?, entry_date = ? WHERE id = ?",
+                       (text, value, entry_date, entry_id))
+        for d in {old[1], entry_date}:
+            _refresh_quest_log_xp(cursor, old[0], d)
+    conn.commit()
     conn.close()
-    return count
+
+
+def delete_quest_log(entry_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    old = cursor.execute("SELECT task_id, entry_date FROM quest_log WHERE id = ?", (entry_id,)).fetchone()
+    if old:
+        cursor.execute("DELETE FROM quest_log WHERE id = ?", (entry_id,))
+        _refresh_quest_log_xp(cursor, old[0], old[1])
+    conn.commit()
+    conn.close()
+
+
+def get_quest_week_stats(year: int, week: int):
+    """(quests completed that ISO week, XP earned from quests that week)."""
+    try:
+        start = date.fromisocalendar(year, week, 1)
+    except ValueError:
+        return 0, 0.0
+    end = start + timedelta(days=6)
+    conn = get_connection()
+    one_off = conn.execute("""
+        SELECT COUNT(*) FROM tasks WHERE active = 1 AND status = 'Complete'
+          AND completed_year = ? AND completed_week = ?
+    """, (year, week)).fetchone()[0]
+    repeats = conn.execute("""
+        SELECT COUNT(*) FROM quest_completions c JOIN tasks t ON t.id = c.task_id
+        WHERE t.active = 1 AND c.completed_on BETWEEN ? AND ?
+    """, (start.isoformat(), end.isoformat())).fetchone()[0]
+    xp = conn.execute("""
+        SELECT COALESCE(SUM(amount), 0) FROM xp_ledger
+        WHERE source IN ('quest', 'subquest', 'quest_log') AND event_date BETWEEN ? AND ?
+    """, (start.isoformat(), end.isoformat())).fetchone()[0]
+    conn.close()
+    return one_off + repeats, float(xp)
 
 # --- Study Chapters: journal, stages and spaced-repetition reviews ---
 STUDY_FIELDS = ("id", "topic", "source", "eli5", "code_sandbox", "break_test", "recall_questions",
@@ -1488,14 +1609,6 @@ def get_expiring_documents(days_ahead: int = 60):
     expiring.sort(key=lambda x: x[3])
     return expiring
 
-# --- Manual quest status (quests without subquests) ---
-def set_task_manual_status(task_id: int, complete: bool):
-    """Completes / reopens a quest that has no subquests."""
-    if get_subtasks(task_id):
-        return  # progress is driven by the subquests
-    year, week, _ = get_current_week_info()
-    update_task_status(task_id, "Complete" if complete else "Planning", year, week)
-
 # --- Automatic daily backup with rotation ---
 def backup_db(keep: int = 14):
     """Creates one consistent backup per day. Set GAMIFICATION_BACKUP_DIR to also
@@ -1765,6 +1878,48 @@ def _run_study_migrations(conn):
             done_date TEXT DEFAULT '',
             remembered INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+def _run_quest_migrations(conn):
+    """Quest overhaul: types, difficulty, repeats, measurable targets, checkbox subquests, log."""
+    cols = {info[1] for info in conn.execute("PRAGMA table_info(tasks)")}
+    for name, ddl in (
+        ("quest_type", "TEXT DEFAULT 'Main'"),
+        ("difficulty", "TEXT DEFAULT 'Normal'"),
+        ("repeat", "TEXT DEFAULT 'none'"),
+        ("metric_unit", "TEXT DEFAULT ''"),
+        ("metric_start", "REAL"),
+        ("metric_target", "REAL"),
+        ("next_step", "TEXT DEFAULT ''"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
+    # the old 5-step stages collapse to Active; completed quests stay in the Hall of Fame
+    conn.execute("UPDATE tasks SET status = 'Active' WHERE status NOT IN ('Active', 'On hold', 'Complete')")
+    sub_cols = {info[1] for info in conn.execute("PRAGMA table_info(subtasks)")}
+    if "done_key" not in sub_cols:
+        conn.execute("ALTER TABLE subtasks ADD COLUMN done_key TEXT DEFAULT ''")
+        conn.execute("UPDATE subtasks SET done_key = 'done' WHERE status = 'Complete'")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS quest_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            entry_date TEXT NOT NULL,
+            text TEXT DEFAULT '',
+            value REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS quest_completions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            period_key TEXT NOT NULL,
+            completed_on TEXT NOT NULL,
+            xp REAL DEFAULT 0,
+            UNIQUE(task_id, period_key)
         )
     """)
 
