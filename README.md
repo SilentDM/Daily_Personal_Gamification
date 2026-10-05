@@ -2,7 +2,7 @@
 
 A lightweight, modern, dark-mode desktop habit tracker and personal gamification dashboard built with **Python**, **Flet**, and **SQLite**.
 
-Transform your daily routines, health habits, and study schedules into an RPG-like progression system featuring **XP, Levels, Streaks, Inverted Scoring for Bad Habits**, and a **Multi-Week Analytics Dashboard**.
+Transform your daily routines, health habits, and study schedules into an RPG-like progression system featuring **XP, Levels, Streaks, Inverted Scoring for Bad Habits**, a **Multi-Week Analytics Dashboard**, a full **calendar**, and a **study system with a journal, spaced repetition and optional AI deep reviews (Gemini)**.
 
 ---
 
@@ -32,6 +32,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **KPI Metrics:** Track Weekly Average, Task Completion Rate (%), Vice Resistance Rate (%), and your Best Performing Day.
 * **Daily Breakdown Bar Chart:** Visualizes Mon–Sun scores with dynamic color coding based on target thresholds.
 * **Multi-Week Progression Chart:** Compares current week against past weeks to track long-term improvement over months.
+* **XP Earned per Week:** Net XP per week from habits, quests, studies and events (last 8 weeks).
 * **Category Mastery:** Visual progress bars displaying your performance per category (`Health`, `Study`, etc.).
 * **Hero vs. Nemesis Habit:** Identifies your strongest habit vs. the activity needing the most focus.
 
@@ -49,7 +50,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Documents Vault:** Personal documents with masked numbers, auto-clearing clipboard copy, expiration alerts and **field-level encryption** (key stored in the Windows Credential Manager — back it up with `python secure.py show-key`).
 
 ### 🖼️ 5. Desktop Wallpaper HUD
-* Renders your level, streak, today's score, quests, studies, upcoming events and document alerts onto your wallpaper (position, accent color and widgets are configurable).
+* Renders your level, streak, today's score, quests, studies (next step and reviews due), upcoming events and document alerts onto your wallpaper (position, accent color and widgets are configurable).
 
 ### ⚡ 6. Quality of Life & Storage
 * **⚡ Quick-Fill Today:** Automatically marks all unlogged tasks for today (`Ok` for positive habits, `Resisted` for bad habits) in one click.
@@ -74,13 +75,15 @@ Daily_Personal_Gamification/
 ├── schedule_view.py    # Weekly habit grid and gamification banner
 ├── graphs_view.py      # Analytics dashboard, KPI cards and charts
 ├── todo_view.py        # Quests and subquests
-├── study_view.py       # Study chapters
+├── study_view.py       # Study chapters: journal, wrap-up, reviews, AI settings
 ├── calendar_view.py    # Calendar and events
 ├── documents_view.py   # Personal documents vault
 ├── wallpaper.py        # Wallpaper HUD renderer
 ├── wallpaper_view.py   # HUD settings screen
+├── ai_gemini.py        # Small Gemini client: key in Credential Manager, model fallback
+├── ai_review.py        # AI deep reviews: review packs and answer grading
 ├── ui_helpers.py       # Shared confirmation dialog
-├── tests/              # Database layer tests (unittest)
+├── tests/              # Database and AI tests (unittest, no network)
 ├── base_wallpaper.jpg  # Background image for the HUD
 └── requirements.txt
 ```
@@ -102,6 +105,12 @@ cd Daily_Personal_Gamification
   python -m venv .venv
   .venv\Scripts\Activate.ps1
   ```
+* **Windows (cmd):**
+  ```bat
+  python -m venv .venv
+  .venv\Scripts\activate
+  ```
+  You can also skip activation and call the venv's Python directly: `.venv\Scripts\python.exe main.py`.
 * **macOS / Linux:**
   ```bash
   python3 -m venv .venv
@@ -123,6 +132,13 @@ python main.py
 python -m unittest discover tests
 ```
 Tests use a temporary data folder, so your real database is never touched.
+
+### 6. (Optional) Set up AI deep reviews
+1. Get a free Gemini API key at [Google AI Studio](https://aistudio.google.com) → **Get API key**.
+2. In the app, open **Study → ✨ AI review settings**, paste the key, click **Test connection** (uses no quota) and **Save**. The key is stored in the Windows Credential Manager, never in the database.
+3. Mastered chapters now get an AI review pack automatically; use **Generate missing packs** for chapters mastered earlier.
+
+> When a pack is generated, that chapter's journal and wrap-up are sent to Google's Gemini API. On the free tier, Google may use that content to improve its products.
 
 ---
 
@@ -151,6 +167,7 @@ To launch the tracker directly from your desktop **without opening an ugly black
 * **Visualizations:** `flet-charts`
 * **Wallpaper / Tray:** `Pillow`, `pystray`
 * **Encryption:** `cryptography` (Fernet) + `keyring`
+* **AI (optional):** Google Gemini via `google-genai` (free tier, structured output with `pydantic`)
 * **Database:** SQLite3 (Local & Persistent in `%APPDATA%`)
 
 ---
