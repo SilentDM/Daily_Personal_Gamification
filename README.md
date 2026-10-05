@@ -9,8 +9,11 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 ## ✨ Features
 
 ### 📅 1. Dynamic Weekly Schedule
-* **Auto-Highlighting Today Column:** Instantly detects the current day of the week (`Mon`–`Sun`) and highlights it with a cyan accent.
-* **Dynamic Habit Rows:** Add tasks on the fly with the `+` button, or delete unwanted tasks with the trash icon.
+* **Built for a 30-second check-in:** today's column shows every option as a button — **one click per habit** (click again to clear), with a "Today 5/7 marked" counter. Nothing to confirm: answers save instantly.
+* **Keyboard shortcuts:** `1`–`4` mark the highlighted habit and jump to the next unmarked one, `0` / `Backspace` clears, arrow keys move (never into future days).
+* **Past days** are coloured squares (one click opens a short menu to correct them); future days are locked.
+* **Nightly reminder:** a tray notification at the time you choose (default 21:30) if anything is still unmarked; the tracker opens on this tab.
+* **Dynamic Habit Rows:** Add habits with the `+` button, edit (rename / category), reorder or delete them.
 * **Categorization:** Tag habits into `Health`, `Study`, `Routine`, or `Vice / Avoid` with colored badges.
 * **Dual Habit Logic (Positive vs. Negative Habits):**
   * **Positive Habits:** `Excellent (+10)`, `Ok (+7)`, `A Little (+4)`, `Skipped (0)`.

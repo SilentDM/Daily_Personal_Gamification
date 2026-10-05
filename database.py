@@ -207,6 +207,32 @@ def add_activity(name: str, category: str = "Routine", is_negative: bool = False
     conn.close()
     return activity_id
 
+def update_activity(activity_id: int, name: str = None, category: str = None):
+    """Renames / re-categorizes a habit (the positive/vice flag stays: past answers depend on it)."""
+    fields = {k: v for k, v in (("name", name), ("category", category)) if v is not None}
+    if not fields:
+        return
+    conn = get_connection()
+    conn.execute(f"UPDATE activities SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                 (*fields.values(), activity_id))
+    conn.commit()
+    conn.close()
+
+
+def count_unmarked_today() -> int:
+    """Active habits with no answer today (used by the nightly check-in reminder)."""
+    year, week, day_idx = get_current_week_info()
+    conn = get_connection()
+    n = conn.execute("""
+        SELECT COUNT(*) FROM activities a
+        WHERE a.active = 1 AND NOT EXISTS (
+            SELECT 1 FROM daily_logs l WHERE l.activity_id = a.id AND l.year = ? AND l.week_number = ?
+              AND l.day_of_week = ? AND l.score IS NOT NULL)
+    """, (year, week, day_idx)).fetchone()[0]
+    conn.close()
+    return n
+
+
 def delete_activity(activity_id: int):
     conn = get_connection()
     cursor = conn.cursor()

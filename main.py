@@ -37,7 +37,7 @@ from PIL import Image, ImageDraw
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update
 from applog import setup_logging
 
-from schedule_view import ScheduleView
+from schedule_view import ScheduleView, SETTING_REMINDED, reminder_time as schedule_reminder_time
 from graphs_view import GraphsView
 from todo_view import TodoView
 from study_view import StudyView
@@ -151,7 +151,10 @@ def main(page: ft.Page):
     documents_view = DocumentsView(page)
 
     def on_nav_change(e):
-        idx = e.control.selected_index
+        show_tab(e.control.selected_index)
+
+    def show_tab(idx: int):
+        rail.selected_index = idx
         schedule_view.visible = (idx == 0)
         graphs_view.visible = (idx == 1)
         todo_view.visible = (idx == 2)
@@ -162,7 +165,6 @@ def main(page: ft.Page):
 
         if idx == 0:
             schedule_view.render()
-            schedule_view.calculate_daily_scores()
         elif idx == 1:
             graphs_view.refresh()
         elif idx == 2:
@@ -204,6 +206,15 @@ def main(page: ft.Page):
         ),
         on_change=on_nav_change
     )
+
+    # Keyboard shortcuts for the Schedule grid (1-4 mark, 0 clear, arrows move)
+    def on_keyboard(e: ft.KeyboardEvent):
+        try:
+            schedule_view.handle_key(e)
+        except Exception:
+            log.exception("keyboard shortcut failed")
+
+    page.on_keyboard_event = on_keyboard
 
     page.add(
         ft.Row(
@@ -310,7 +321,21 @@ def main(page: ft.Page):
                     update_desktop_wallpaper()
                     ai_review.retry_pending(on_done=study_view._ai_done)  # queued/failed AI review packs
 
-                # 3. Documents: renewal quests + tray reminders at milestones (08:00-22:00)
+                # 3. Nightly check-in reminder (once a day, only if something is still unmarked)
+                remind_at = schedule_reminder_time()
+                if remind_at and now.strftime("%H:%M") >= remind_at and                         db.get_hud_settings().get(SETTING_REMINDED) != today_str:
+                    db.set_hud_setting(SETTING_REMINDED, today_str)
+                    left = db.count_unmarked_today()
+                    if left:
+                        show_tab(0)  # the tracker opens straight on the Schedule
+                        try:
+                            tray_icon_instance.notify(
+                                f"{left} habit{'s' if left != 1 else ''} still unmarked today.",
+                                "Daily check-in")
+                        except Exception:
+                            log.exception("check-in notification failed")
+
+                # 4. Documents: renewal quests + tray reminders at milestones (08:00-22:00)
                 if time.monotonic() >= next_doc_check:
                     next_doc_check = time.monotonic() + 3600
                     if db.sync_renewal_quests():
@@ -323,7 +348,7 @@ def main(page: ft.Page):
                             except Exception:
                                 log.exception("document notification failed")
 
-                # 4. Calendar reminders (each event has its own lead time) and start alarms
+                # 5. Calendar reminders (each event has its own lead time) and start alarms
                 tomorrow = today + timedelta(days=1)
                 done = db.get_completed_events(today_str, tomorrow.isoformat())
                 for day_events in db.get_events_between(today, tomorrow).values():

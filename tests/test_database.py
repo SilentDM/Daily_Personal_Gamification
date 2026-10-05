@@ -84,6 +84,25 @@ class HabitXpTests(DbTestCase):
         self.assertAlmostEqual(self.xp(), 10.0)  # avg 10 -> +10 XP
 
 
+class HabitManagementTests(DbTestCase):
+    def test_rename_and_recategorize_keep_history(self):
+        a = db.add_activity("Gym")
+        self.log_today(a, "Excellent", 10)
+        db.update_activity(a, name="Gym / Workout", category="Health")
+        self.assertEqual(db.get_activities()[0][1:3], ("Gym / Workout", "Health"))
+        year, week, day = db.get_current_week_info()
+        self.assertEqual(db.get_current_week_logs(year, week)[(a, day)], ("Excellent", 10))
+
+    def test_count_unmarked_today(self):
+        a, b = db.add_activity("Gym"), db.add_activity("Read")
+        db.add_activity("Archived")
+        db.delete_activity(db.get_activities()[-1][0])
+        self.assertEqual(db.count_unmarked_today(), 2)
+        self.log_today(a, "Ok", 7)
+        self.log_today(b, "-", None)  # cleared answers still count as unmarked
+        self.assertEqual(db.count_unmarked_today(), 1)
+
+
 class QuestTests(DbTestCase):
     MON = date(2025, 6, 2)  # a Monday
 
