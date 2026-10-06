@@ -32,13 +32,15 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Levels 1–100:** One level every 10 XP, max level at 1,000 XP.
 * **Rank Titles:** **Novice** $\rightarrow$ **Apprentice** (16) $\rightarrow$ **Disciplined** (36) $\rightarrow$ **Elite** (61) $\rightarrow$ **Master** (81) $\rightarrow$ **Centurion** (100).
 
-### 📊 3. Performance & Analytics Dashboard
-* **KPI Metrics:** Track Weekly Average, Task Completion Rate (%), Vice Resistance Rate (%), and your Best Performing Day.
-* **Daily Breakdown Bar Chart:** Visualizes Mon–Sun scores with dynamic color coding based on target thresholds.
-* **Multi-Week Progression Chart:** Compares current week against past weeks to track long-term improvement over months.
-* **XP Earned per Week:** Net XP per week from habits, quests, studies and events (last 8 weeks).
-* **Category Mastery:** Visual progress bars displaying your performance per category (`Health`, `Study`, etc.).
-* **Hero vs. Nemesis Habit:** Identifies your strongest habit vs. the activity needing the most focus.
+### 📊 3. Graphs
+* **One period filter for everything:** last 7 days, 30 days, 12 weeks or 12 months.
+* **Headline tiles vs the previous period:** average score, days logged, XP earned, best streak and study time (▲ / ▼ with the difference).
+* **Habit heatmap** (habit × day, or × week for long periods) — consistency at a glance, with a tooltip per cell.
+* **Daily score trend** (line) with the 7.0 goal, **habit ranking** (strongest first) and **weekday pattern**.
+* **Year map:** one square per day for the last 12 months, coloured by the daily score.
+* **XP per week** (gains and net losses), **study time per week** and **reviews & quests completed per week**.
+* **This week (Gemini, optional):** a short weekly summary — what went well, one pattern, one small suggestion (one call per week).
+* Colours follow a validated, colour-blind-safe palette (one blue scale for scores; text is never coloured).
 
 ### 🗺️ 4. Quests, Study, Calendar & Documents
 * **Quests:** an RPG quest log — **no deadlines on purpose**: nothing can be late; quests can be put **On hold**.
@@ -91,7 +93,8 @@ Daily_Personal_Gamification/
 ├── applog.py           # Rotating log file in AppData
 ├── updater.py          # git fast-forward auto-update on launch
 ├── schedule_view.py    # Weekly habit grid and gamification banner
-├── graphs_view.py      # Analytics dashboard, KPI cards and charts
+├── graphs_view.py      # Graphs: period filter, tiles, heatmap, trend, ranking, year map, weekly charts
+├── analytics.py        # Read-only analytics behind the Graphs tab
 ├── todo_view.py        # Quest log: steps, quest log, targets, repeats, Hall of Fame, AI planner
 ├── study_view.py       # Study chapters: journal, wrap-up, reviews, AI settings
 ├── calendar_view.py    # Calendar and events
@@ -102,6 +105,7 @@ Daily_Personal_Gamification/
 ├── ai_review.py        # AI deep reviews: review packs and answer grading
 ├── ai_quest.py         # AI quest planner (no dates or deadlines)
 ├── ai_insight.py       # Insight of the day for the wallpaper (one Gemini call per day)
+├── ai_weekly.py        # Weekly summary for the Graphs tab (one Gemini call per week)
 ├── ui_helpers.py       # Shared confirmation dialog
 ├── tests/              # Database and AI tests (unittest, no network)
 ├── base_wallpaper.jpg  # Background image for the HUD
