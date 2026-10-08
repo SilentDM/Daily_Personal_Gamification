@@ -60,9 +60,13 @@ def build_context(today: date = None) -> str:
     per = {}
     for _, name, neg, _, _, score in analytics.habit_logs(this_start, today):
         per.setdefault((name, neg), []).append(score)
+    rests = {}
+    for _, name, _ in analytics.rest_logs(this_start, today):
+        rests[name] = rests.get(name, 0) + 1
     if per:
-        lines.append("HABITS THIS WEEK (average, days):")
-        lines += [f"- {n}{' (vice to avoid)' if neg else ''}: {sum(v) / len(v):.1f} ({len(v)})"
+        lines.append("HABITS THIS WEEK (average, days; rest days are planned breaks, not failures):")
+        lines += [f"- {n}{' (vice to avoid)' if neg else ''}: {sum(v) / len(v):.1f} ({len(v)})" +
+                  (f", {rests[n]} rest day(s)" if rests.get(n) else "")
                   for (n, neg), v in sorted(per.items(), key=lambda kv: -sum(kv[1]) / len(kv[1]))]
     week = analytics.weekly_series("7d", today)[-1]
     lines.append(f"QUESTS COMPLETED THIS WEEK: {week['quests']} • STUDY REVIEWS DONE: {week['reviews']}")

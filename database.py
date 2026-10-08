@@ -3,7 +3,8 @@ import calendar as _calendar
 import secure
 from pathlib import Path
 from datetime import datetime, date, timedelta
-from constants import (get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, SCORE_PASSING,
+from constants import (get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, SCORE_PASSING, REST_STATUS,
+                       REST_LIMIT_PER_WEEK,
                        XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS,
                        XP_SUBQUEST, XP_QUEST_LOG, QUEST_DIFFICULTY_XP)
 
@@ -227,8 +228,8 @@ def count_unmarked_today() -> int:
         SELECT COUNT(*) FROM activities a
         WHERE a.active = 1 AND NOT EXISTS (
             SELECT 1 FROM daily_logs l WHERE l.activity_id = a.id AND l.year = ? AND l.week_number = ?
-              AND l.day_of_week = ? AND l.score IS NOT NULL)
-    """, (year, week, day_idx)).fetchone()[0]
+              AND l.day_of_week = ? AND (l.score IS NOT NULL OR l.status = ?))
+    """, (year, week, day_idx, REST_STATUS)).fetchone()[0]
     conn.close()
     return n
 
@@ -273,7 +274,32 @@ def move_activity(activity_id: int, direction: str):
     conn.close()
 
 # --- Daily Logs Operations ---
+def rest_days_used(activity_id: int, year: int, week: int, exclude_day: int = None) -> int:
+    """How many Rest answers this habit has in that ISO week (optionally ignoring one day)."""
+    conn = get_connection()
+    n = conn.execute("""
+        SELECT COUNT(*) FROM daily_logs
+        WHERE activity_id = ? AND year = ? AND week_number = ? AND status = ? AND day_of_week != ?
+    """, (activity_id, year, week, REST_STATUS, -1 if exclude_day is None else exclude_day)).fetchone()[0]
+    conn.close()
+    return n
+
+
+def can_rest(activity_id: int, year: int, week: int, day_idx: int) -> bool:
+    """Rest is for positive habits only, up to REST_LIMIT_PER_WEEK per habit per week."""
+    conn = get_connection()
+    row = conn.execute("SELECT is_negative FROM activities WHERE id = ?", (activity_id,)).fetchone()
+    conn.close()
+    if not row or row[0]:
+        return False
+    return rest_days_used(activity_id, year, week, exclude_day=day_idx) < REST_LIMIT_PER_WEEK
+
+
 def save_log(activity_id: int, year: int, week: int, day_idx: int, status: str, score: int):
+    if status == REST_STATUS:
+        if not can_rest(activity_id, year, week, day_idx):
+            raise ValueError("Rest isn't available for this habit (vice, or weekly limit reached)")
+        score = None  # rest never counts in any calculation
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -319,31 +345,41 @@ def get_user_xp_and_level():
 
     return total_xp, level, xp_in_level, get_rank_title(level)
 
-def get_current_streak():
+def streak_days():
+    """{date: True/False} — whether each answered day counts towards the streak: a daily average of
+    SCORE_PASSING or more, or a day where every answer is Rest."""
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT event_date, meta FROM xp_ledger WHERE source = 'habit_day' AND meta IS NOT NULL"
-    ).fetchall()
+    rows = conn.execute("""
+        SELECT l.year, l.week_number, l.day_of_week, l.status, l.score
+        FROM daily_logs l JOIN activities a ON a.id = l.activity_id
+        WHERE a.active = 1 AND (l.score IS NOT NULL OR l.status = ?)
+    """, (REST_STATUS,)).fetchall()
     conn.close()
-
-    date_scores = {}
-    for d, avg in rows:
+    per_day = {}
+    for y, w, d, status, score in rows:
         try:
-            date_scores[date.fromisoformat(d)] = avg
+            day = date.fromisocalendar(y, w, d + 1)
         except ValueError:
             continue
-    if not date_scores:
+        scores, _ = per_day.setdefault(day, ([], []))
+        if score is not None:
+            scores.append(score)
+        else:
+            per_day[day][1].append(status)
+    return {day: (sum(s) / len(s) >= SCORE_PASSING) if s else bool(rests)
+            for day, (s, rests) in per_day.items()}
+
+
+def get_current_streak(today: date = None):
+    days = streak_days()
+    if not days:
         return 0
-
-    today = date.today()
+    today = today or date.today()
+    current_check = today if days.get(today) else today - timedelta(days=1)  # today may still be open
     streak = 0
-    current_check = today
-    if date_scores.get(today, 0) < SCORE_PASSING:
-        current_check = date.fromordinal(today.toordinal() - 1)
-
-    while date_scores.get(current_check, 0) >= SCORE_PASSING:
+    while days.get(current_check):
         streak += 1
-        current_check = date.fromordinal(current_check.toordinal() - 1)
+        current_check -= timedelta(days=1)
     return streak
 
 def get_past_weeks_scores(num_weeks=6):

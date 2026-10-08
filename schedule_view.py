@@ -10,6 +10,8 @@ from constants import (
     NEGATIVE_SCORES,
     CATEGORIES,
     DAY_NAMES,
+    REST_STATUS,
+    REST_LIMIT_PER_WEEK,
 )
 
 CATEGORY_COLORS = {
@@ -19,8 +21,9 @@ CATEGORY_COLORS = {
     "Vice / Avoid": ft.Colors.RED_400,
 }
 SHORT_LABELS = {"Excellent": "Exc", "Ok": "Ok", "A Little": "Little", "Skipped": "Skip",
-                "Resisted": "Resisted", "Slipped": "Slipped", "Relapsed": "Relapsed"}
-TITLE_W, TODAY_W, DAY_W, ACTIONS_W = 250, 260, 92, 150
+                "Resisted": "Resisted", "Slipped": "Slipped", "Relapsed": "Relapsed", REST_STATUS: "Rest"}
+TITLE_W, TODAY_W, DAY_W, ACTIONS_W = 250, 295, 92, 150
+REST_COLOR = "#6b6a66"  # neutral: answered, but not a score
 SETTING_REMINDER = "checkin_reminder_time"   # "HH:MM" or "" (off)
 SETTING_REMINDED = "checkin_reminded_on"     # ISO date of the last reminder
 DEFAULT_REMINDER = "21:30"
@@ -30,6 +33,11 @@ def options_for(is_negative: bool):
     """[(status, score)] in keyboard order (1, 2, 3, 4)."""
     scores = NEGATIVE_SCORES if is_negative else POSITIVE_SCORES
     return [(status, score) for status, score in scores.items() if score is not None]
+
+
+def answered(log) -> bool:
+    """A (status, score) log counts as answered when it has a score or is a Rest."""
+    return log is not None and (log[1] is not None or log[0] == REST_STATUS)
 
 
 def score_color(score):
@@ -139,9 +147,17 @@ class ScheduleView(ft.Column):
         """Saves one answer ("-" clears it). Future days can't be logged."""
         if day_idx > self._last_editable_day():
             return
-        score = dict(options_for(is_negative)).get(status)
-        db.save_log(activity_id, self.year, self.week, day_idx, status if score is not None else "-", score)
+        if status == REST_STATUS:
+            if not self.can_rest(activity_id, is_negative, day_idx):
+                return
+            db.save_log(activity_id, self.year, self.week, day_idx, REST_STATUS, None)
+        else:
+            score = dict(options_for(is_negative)).get(status)
+            db.save_log(activity_id, self.year, self.week, day_idx, status if score is not None else "-", score)
         update_desktop_wallpaper()
+
+    def can_rest(self, activity_id: int, is_negative: bool, day_idx: int) -> bool:
+        return not is_negative and db.can_rest(activity_id, self.year, self.week, day_idx)
 
     def _click_today(self, row, act, status, current):
         act_id, _, _, is_neg = act
@@ -162,7 +178,7 @@ class ScheduleView(ft.Column):
         n = len(acts)
         for step in range(1, n + 1):
             r = (row + step) % n
-            if logs.get((acts[r][0], day_idx), ("-", None))[1] is None:
+            if not answered(logs.get((acts[r][0], day_idx))):
                 return r
         return min(row + 1, n - 1) if n else 0
 
@@ -170,7 +186,7 @@ class ScheduleView(ft.Column):
         if not self.viewing_current:
             return  # Quick-Fill only makes sense for today
         for act_id, _, _, is_neg in db.get_activities():
-            if self._logs.get((act_id, self.today_idx), ("-", None))[1] is None:
+            if not answered(self._logs.get((act_id, self.today_idx))):
                 status = "Resisted" if is_neg else "Ok"
                 db.save_log(act_id, self.year, self.week, self.today_idx, status, dict(options_for(is_neg))[status])
         self.render()
@@ -184,8 +200,8 @@ class ScheduleView(ft.Column):
 
     # ------------------------------------------------------------ keyboard (wired in main.py)
     def handle_key(self, e) -> bool:
-        """1-4 answer the highlighted cell (and jump to the next open habit), 0/Backspace clear,
-        arrows move. Returns True when the key was used."""
+        """1-4 answer the highlighted cell (and jump to the next open habit), R rests it (positive
+        habits, up to 3 per week), 0/Backspace clear, arrows move. Returns True when the key was used."""
         if not self.visible or self.typing or self.modal or not getattr(self, "_activities", None):
             return False
         if e.ctrl or e.alt or e.meta:
@@ -206,6 +222,13 @@ class ScheduleView(ft.Column):
             self.set_status(act_id, day, is_neg, opts[idx][0])
             self._logs = db.get_current_week_logs(self.year, self.week)
             row = self._next_row(row, day)
+        elif key in ("R", "r", "5"):
+            act_id, _, _, is_neg = acts[row]
+            if not self.can_rest(act_id, is_neg, day):
+                return True  # vice or weekly limit reached: nothing happens
+            self.set_status(act_id, day, is_neg, REST_STATUS)
+            self._logs = db.get_current_week_logs(self.year, self.week)
+            row = self._next_row(row, day)
         elif key in ("0", "Backspace", "Delete"):
             act_id, _, _, is_neg = acts[row]
             self.set_status(act_id, day, is_neg, "-")
@@ -220,7 +243,7 @@ class ScheduleView(ft.Column):
         if day < 0:
             return 0, 0
         first_open = next((i for i, a in enumerate(self._activities)
-                           if self._logs.get((a[0], day), ("-", None))[1] is None), 0)
+                           if not answered(self._logs.get((a[0], day)))), 0)
         return first_open, day
 
     # ------------------------------------------------------------ habits
@@ -336,8 +359,7 @@ class ScheduleView(ft.Column):
 
     def _title_row(self):
         if self.viewing_current and self._activities:
-            marked = sum(1 for a in self._activities
-                         if self._logs.get((a[0], self.today_idx), ("-", None))[1] is not None)
+            marked = sum(1 for a in self._activities if answered(self._logs.get((a[0], self.today_idx))))
             total = len(self._activities)
             progress = ft.Container(
                 content=ft.Text(f"Today {marked}/{total} marked" + (" ✓" if marked == total else ""), size=13,
@@ -360,7 +382,7 @@ class ScheduleView(ft.Column):
                 ft.Button(content="This week", icon=ft.Icons.TODAY, disabled=self.viewing_current,
                           on_click=lambda e: self._go_current_week()),
                 ft.Container(expand=True),
-                ft.Text("Keys: 1-4 mark • 0 clear • arrows move", size=11, color=ft.Colors.GREY_500),
+                ft.Text("Keys: 1-4 mark • R rest • 0 clear • arrows move", size=11, color=ft.Colors.GREY_500),
                 ft.IconButton(ft.Icons.NOTIFICATIONS_ACTIVE if rem else ft.Icons.NOTIFICATIONS_OFF_OUTLINED,
                               icon_color=ft.Colors.AMBER_ACCENT if rem else ft.Colors.GREY_500,
                               tooltip=f"Check-in reminder at {rem}" if rem else "Check-in reminder off",
@@ -442,22 +464,45 @@ class ScheduleView(ft.Column):
                 alignment=ft.Alignment.CENTER, expand=True, ink=True,
                 tooltip=f"{status} (+{score}) • key {i}" + (" • click again to clear" if selected else ""),
                 on_click=lambda e, s=status: self._click_today(row, act, s, current)))
+        if not act[3]:  # positive habits can rest; vices never do
+            selected = current == REST_STATUS
+            allowed = selected or self.can_rest(act[0], act[3], self.today_idx)
+            used = db.rest_days_used(act[0], self.year, self.week, exclude_day=self.today_idx)
+            tip = ("Rest day — doesn't count in any score • click again to clear" if selected else
+                   f"Rest day: this habit doesn't apply today; no score impact • key R • "
+                   f"{REST_LIMIT_PER_WEEK - used} of {REST_LIMIT_PER_WEEK} left this week" if allowed else
+                   f"No rest days left this week ({REST_LIMIT_PER_WEEK} used)")
+            buttons.append(ft.Container(
+                content=ft.Icon(ft.Icons.BEDTIME_OUTLINED if not selected else ft.Icons.BEDTIME, size=16,
+                                color=ft.Colors.WHITE if selected else (ft.Colors.GREY_400 if allowed
+                                                                        else ft.Colors.GREY_700)),
+                bgcolor=REST_COLOR if selected else None,
+                border=ft.Border.all(1, REST_COLOR if selected else ft.Colors.GREY_700),
+                border_radius=6, padding=ft.Padding.symmetric(horizontal=6, vertical=5), width=34,
+                alignment=ft.Alignment.CENTER, ink=allowed, tooltip=tip,
+                on_click=(lambda e: self._click_today(row, act, REST_STATUS, current)) if allowed else None))
         return ft.Row(buttons, spacing=3)
 
     def _past_cell(self, row, act, d, status, score):
         """A coloured square; one click opens a short menu to set/correct it."""
-        answered = score is not None
+        is_rest = status == REST_STATUS
+        has_answer = score is not None or is_rest
         chip = ft.Container(
-            content=ft.Text(SHORT_LABELS.get(status, status) if answered else "—", size=11,
-                            weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE if answered else ft.Colors.GREY_500),
+            content=ft.Text(SHORT_LABELS.get(status, status) if has_answer else "—", size=11,
+                            weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE if has_answer else ft.Colors.GREY_500),
             width=DAY_W - 8, height=30, border_radius=6, alignment=ft.Alignment.CENTER,
-            bgcolor=score_color(score) if answered else ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
-            border=None if answered else ft.Border.all(1, ft.Colors.GREY_800))
+            bgcolor=REST_COLOR if is_rest else (score_color(score) if has_answer else
+                                                ft.Colors.with_opacity(0.05, ft.Colors.WHITE)),
+            border=None if has_answer else ft.Border.all(1, ft.Colors.GREY_800))
         items = [ft.PopupMenuItem(content=ft.Text(f"{s}  (+{sc})"), checked=s == status,
                                   on_click=lambda e, s=s: self._pick_past(row, act, d, s))
                  for s, sc in options_for(act[3])]
+        if not act[3] and (is_rest or self.can_rest(act[0], act[3], d)):
+            items.append(ft.PopupMenuItem(content=ft.Text("Rest  (no score)"), checked=is_rest,
+                                          on_click=lambda e: self._pick_past(row, act, d, REST_STATUS)))
         items.append(ft.PopupMenuItem(content=ft.Text("Clear"), on_click=lambda e: self._pick_past(row, act, d, "-")))
-        return ft.PopupMenuButton(content=chip, items=items, tooltip=f"{DAY_NAMES[d]}: {status if answered else 'not marked'}")
+        label = "rest day" if is_rest else (status if has_answer else "not marked")
+        return ft.PopupMenuButton(content=chip, items=items, tooltip=f"{DAY_NAMES[d]}: {label}")
 
     def _add_row(self):
         new_input = ft.TextField(hint_text="New activity name...", width=200, dense=True, text_size=13)
