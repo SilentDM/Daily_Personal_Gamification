@@ -69,7 +69,7 @@ class AnalyticsTests(DbTestCase):
         log(self.smoke, TODAY, "Resisted", 10)
         ranking = an.habit_ranking("7d", TODAY)
         self.assertEqual([r[0] for r in ranking], ["Gym", "Smoking", "Read"])  # ties: more days logged first
-        self.assertEqual(ranking[0][2:], (10.0, 3, 7))
+        self.assertEqual(ranking[0][2:], (10.0, 3, 7, 0))
 
     def test_weekday_pattern(self):
         log(self.gym, date(2026, 10, 5), "Excellent", 10)  # Monday
@@ -115,6 +115,35 @@ class AnalyticsTests(DbTestCase):
         self.assertEqual(this_week["week"], date(2026, 10, 5))
         self.assertEqual((this_week["study_minutes"], this_week["reviews"], this_week["quests"]), (30, 1, 2))
         self.assertGreater(this_week["xp"], 0)
+
+
+    def test_rest_is_visible_but_never_scored(self):
+        log(self.gym, TODAY, "Excellent", 10)
+        log(self.read, TODAY, "Rest", None)
+        log(self.read, TODAY - timedelta(days=1), "Rest", None)  # a rest-only day
+        start, end = an.period_bounds("7d", TODAY)[:2]
+        self.assertEqual(an.daily_scores(start, end), {TODAY: 10.0})
+        self.assertEqual(an.rest_only_days(start, end), {TODAY - timedelta(days=1)})
+        cols, rows = an.habit_matrix("7d", TODAY)
+        read = rows[1]
+        self.assertEqual((read[2][-1], read[3][-1], read[4][-1]), (None, "Rest", 1))
+        ranking = {r[0]: r for r in an.habit_ranking("7d", TODAY)}
+        self.assertNotIn("Read", ranking)  # no scored answers -> not ranked
+        log(self.read, TODAY - timedelta(days=2), "Ok", 7)
+        ranking = {r[0]: r for r in an.habit_ranking("7d", TODAY)}
+        self.assertEqual(ranking["Read"][2:], (7.0, 1, 7, 2))
+        k = an.kpis("7d", TODAY)["current"]
+        self.assertEqual((k["days_logged"], k["rest_days"], k["avg_score"]), (3, 2, 8.5))
+        year = an.year_map(TODAY)
+        flags = {d: r for wk in year for d, v, f, r in wk}
+        self.assertTrue(flags[TODAY - timedelta(days=1)])
+        self.assertFalse(flags[TODAY])
+
+    def test_best_streak_counts_rest_only_days(self):
+        log(self.gym, TODAY - timedelta(days=2), "Excellent", 10)
+        log(self.gym, TODAY - timedelta(days=1), "Rest", None)
+        log(self.gym, TODAY, "Ok", 7)
+        self.assertEqual(an.kpis("7d", TODAY)["current"]["best_streak"], 3)
 
 
 class WeeklySummaryTests(DbTestCase):

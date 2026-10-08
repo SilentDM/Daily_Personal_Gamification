@@ -15,6 +15,13 @@ NEGATIVE_SCORES = {
     "-": None
 }
 
+# "Rest": answered, but the habit doesn't apply that day (e.g. a rest day after a long run).
+# Stored with score NULL, so it never adds, removes or affects any score or XP. Positive habits only
+# (vices have no day off), at most REST_LIMIT_PER_WEEK per habit per ISO week. A day where every
+# answer is Rest still counts towards the streak.
+REST_STATUS = "Rest"
+REST_LIMIT_PER_WEEK = 3
+
 CATEGORIES = ["Health", "Study", "Routine", "Vice / Avoid"]
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

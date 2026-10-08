@@ -84,6 +84,58 @@ class HabitXpTests(DbTestCase):
         self.assertAlmostEqual(self.xp(), 10.0)  # avg 10 -> +10 XP
 
 
+class RestDayTests(DbTestCase):
+    def log_on(self, activity_id, day, status, score):
+        iso = day.isocalendar()
+        db.save_log(activity_id, iso[0], iso[1], iso[2] - 1, status, score)
+
+    def test_rest_is_answered_but_never_scored(self):
+        gym, read = db.add_activity("Gym"), db.add_activity("Read")
+        self.log_today(read, "Excellent", 10)
+        xp_before = self.xp()
+        self.log_today(gym, "Rest", 7)  # any score passed in is ignored
+        year, week, day = db.get_current_week_info()
+        self.assertEqual(db.get_current_week_logs(year, week)[(gym, day)], ("Rest", None))
+        self.assertAlmostEqual(self.xp(), xp_before)  # the day is still worth exactly Read's 10
+        self.assertEqual(db.count_unmarked_today(), 0)
+
+    def test_vices_cannot_rest(self):
+        smoke = db.add_activity("Smoking", "Vice / Avoid", is_negative=True)
+        year, week, day = db.get_current_week_info()
+        self.assertFalse(db.can_rest(smoke, year, week, day))
+        with self.assertRaises(ValueError):
+            self.log_today(smoke, "Rest", None)
+
+    def test_three_rest_days_per_habit_per_week(self):
+        gym, read = db.add_activity("Gym"), db.add_activity("Read")
+        monday = date(2026, 10, 5)
+        for i in range(3):
+            self.log_on(gym, monday + timedelta(days=i), "Rest", None)
+        with self.assertRaises(ValueError):
+            self.log_on(gym, monday + timedelta(days=3), "Rest", None)
+        self.log_on(gym, monday + timedelta(days=2), "Rest", None)  # re-saving the same day is fine
+        self.log_on(read, monday + timedelta(days=3), "Rest", None)  # other habits have their own 3
+        self.log_on(gym, monday + timedelta(days=7), "Rest", None)  # a new week resets the allowance
+        self.assertEqual(db.rest_days_used(gym, 2026, 41), 3)
+
+    def test_streak_counts_rest_only_days(self):
+        gym = db.add_activity("Gym")
+        today = date.today()
+        self.log_on(gym, today - timedelta(days=2), "Excellent", 10)
+        self.log_on(gym, today - timedelta(days=1), "Rest", None)
+        self.log_on(gym, today, "Ok", 7)
+        self.assertEqual(db.get_current_streak(), 3)
+
+    def test_streak_partial_rest_uses_the_other_habits(self):
+        gym, read = db.add_activity("Gym"), db.add_activity("Read")
+        today = date.today()
+        self.log_on(gym, today, "Rest", None)
+        self.log_on(read, today, "A Little", 4)  # the day is only Read's 4 -> below 7
+        self.assertEqual(db.get_current_streak(), 0)
+        self.log_on(read, today, "Excellent", 10)
+        self.assertEqual(db.get_current_streak(), 1)
+
+
 class HabitManagementTests(DbTestCase):
     def test_rename_and_recategorize_keep_history(self):
         a = db.add_activity("Gym")

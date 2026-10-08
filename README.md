@@ -10,7 +10,8 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 
 ### 📅 1. Dynamic Weekly Schedule
 * **Built for a 30-second check-in:** today's column shows every option as a button — **one click per habit** (click again to clear), with a "Today 5/7 marked" counter. Nothing to confirm: answers save instantly.
-* **Keyboard shortcuts:** `1`–`4` mark the highlighted habit and jump to the next unmarked one, `0` / `Backspace` clears, arrow keys move (never into future days).
+* **Keyboard shortcuts:** `1`–`4` mark the highlighted habit and jump to the next unmarked one, `R` marks a rest day, `0` / `Backspace` clears, arrow keys move (never into future days).
+* **Rest days (🌙):** for days when a habit doesn't apply (e.g. no training the day after a 10 km run). A rest counts as answered but **never affects any score or XP**; a day where every answer is Rest still **counts towards the streak**. Positive habits only (vices have no day off), up to **3 per habit per week**, and always visible in the Graphs (heatmap, year map, ranking) and the weekly summary.
 * **Past days** are coloured squares (one click opens a short menu to correct them); future days are locked.
 * **Nightly reminder:** a tray notification at the time you choose (default 21:30) if anything is still unmarked; the tracker opens on this tab.
 * **Dynamic Habit Rows:** Add habits with the `+` button, edit (rename / category), reorder or delete them.

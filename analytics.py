@@ -2,7 +2,7 @@
 from datetime import date, timedelta
 
 import database as db
-from constants import SCORE_PASSING, DAY_NAMES
+from constants import SCORE_PASSING, DAY_NAMES, REST_STATUS
 
 # key -> (label, number of days)
 PERIODS = {
@@ -57,6 +57,33 @@ def habit_logs(start: date, end: date):
     return out
 
 
+def rest_logs(start: date, end: date):
+    """[(activity_id, name, date)] for Rest answers of active habits."""
+    years = sorted({start.isocalendar()[0], end.isocalendar()[0], start.year, end.year})
+    conn = db.get_connection()
+    rows = conn.execute("""
+        SELECT l.activity_id, a.name, l.year, l.week_number, l.day_of_week
+        FROM daily_logs l JOIN activities a ON a.id = l.activity_id
+        WHERE a.active = 1 AND l.status = ? AND l.year BETWEEN ? AND ?
+    """, (REST_STATUS, years[0], years[-1])).fetchall()
+    conn.close()
+    out = []
+    for aid, name, y, w, d in rows:
+        try:
+            day = date.fromisocalendar(y, w, d + 1)
+        except ValueError:
+            continue
+        if start <= day <= end:
+            out.append((aid, name, day))
+    return out
+
+
+def rest_only_days(start: date, end: date, scores: dict = None):
+    """Days where every answer was Rest (they count as logged and towards the streak)."""
+    scores = daily_scores(start, end) if scores is None else scores
+    return {d for _, _, d in rest_logs(start, end) if d not in scores}
+
+
 def daily_scores(start: date, end: date):
     """{date: average score} for days with at least one answer."""
     per_day = {}
@@ -84,7 +111,8 @@ def habit_matrix(key: str, today: date = None):
     """(columns, rows) for the habit heatmap.
 
     columns: [(label, first_day, last_day)] — days (7d/30d) or weeks (12w/1y)
-    rows:    [(name, is_negative, [value or None per column], [status or None per column])]
+    rows:    [(name, is_negative, [value or None per column], [status or None per column],
+               [rest days per column])]
     """
     start, end, _, _ = period_bounds(key, today)
     if uses_weeks(key):
@@ -95,25 +123,37 @@ def habit_matrix(key: str, today: date = None):
     else:
         columns = [(DAY_NAMES[d.weekday()][0] if key == "7d" else f"{d.day}", d, d) for d in _days(start, end)]
     logs = habit_logs(start, end)
+    rests = rest_logs(start, end)
     rows = []
     for aid, name, _, neg in db.get_activities():
-        values, statuses = [], []
+        values, statuses, rest_counts = [], [], []
         for _, first, last in columns:
             cell = [(score, status) for a, _, _, d, status, score in logs if a == aid and first <= d <= last]
+            rested = sum(1 for a, _, d in rests if a == aid and first <= d <= last)
             values.append(sum(s for s, _ in cell) / len(cell) if cell else None)
-            statuses.append(cell[0][1] if len(cell) == 1 else (f"{len(cell)} days" if cell else None))
-        rows.append((name, bool(neg), values, statuses))
+            if len(cell) == 1:
+                statuses.append(cell[0][1])
+            elif cell:
+                statuses.append(f"{len(cell)} days" + (f", {rested} rest" if rested else ""))
+            else:
+                statuses.append(REST_STATUS if rested else None)
+            rest_counts.append(rested)
+        rows.append((name, bool(neg), values, statuses, rest_counts))
     return columns, rows
 
 
 def habit_ranking(key: str, today: date = None):
-    """[(name, is_negative, average, days_logged, days_in_period)], strongest first."""
+    """[(name, is_negative, average, days_logged, days_in_period, rest_days)], strongest first."""
     start, end, _, _ = period_bounds(key, today)
     total = (end - start).days + 1
     per = {}
     for aid, name, neg, _, _, score in habit_logs(start, end):
         per.setdefault((aid, name, neg), []).append(score)
-    ranking = [(name, neg, sum(v) / len(v), len(v), total) for (aid, name, neg), v in per.items()]
+    rested = {}
+    for aid, _, _ in rest_logs(start, end):
+        rested[aid] = rested.get(aid, 0) + 1
+    ranking = [(name, neg, sum(v) / len(v), len(v), total, rested.get(aid, 0))
+               for (aid, name, neg), v in per.items()]
     ranking.sort(key=lambda r: (-r[2], -r[3], r[0].lower()))
     return ranking
 
@@ -128,23 +168,24 @@ def weekday_pattern(key: str, today: date = None):
 
 
 def year_map(today: date = None):
-    """53 weeks × 7 days ending this week: [[(date, average or None, in_future)] per week]."""
+    """53 weeks × 7 days ending this week: [[(date, average or None, in_future, rest_only)] per week]."""
     today = today or date.today()
     first = monday(today) - timedelta(weeks=52)
     scores = daily_scores(first, today)
+    rest_only = rest_only_days(first, today, scores)
     weeks = []
     for w in range(53):
         wk = first + timedelta(weeks=w)
-        weeks.append([(wk + timedelta(days=i), scores.get(wk + timedelta(days=i)), wk + timedelta(days=i) > today)
-                      for i in range(7)])
+        days = [wk + timedelta(days=i) for i in range(7)]
+        weeks.append([(d, scores.get(d), d > today, d in rest_only) for d in days])
     return weeks
 
 
 # ------------------------------------------------------------------ headline numbers
-def _best_streak(scores: dict, start: date, end: date) -> int:
+def _best_streak(scores: dict, start: date, end: date, rest_only=frozenset()) -> int:
     best = run = 0
     for d in _days(start, end):
-        if scores.get(d, 0) >= SCORE_PASSING:
+        if scores.get(d, 0) >= SCORE_PASSING or d in rest_only:
             run += 1
             best = max(best, run)
         else:
@@ -172,12 +213,14 @@ def _study_minutes(start: date, end: date) -> int:
 
 def _summary(start: date, end: date):
     scores = daily_scores(start, end)
+    rest_only = rest_only_days(start, end, scores)
     return {
         "avg_score": sum(scores.values()) / len(scores) if scores else None,
-        "days_logged": len(scores),
+        "days_logged": len(scores) + len(rest_only),
         "days_total": (end - start).days + 1,
+        "rest_days": len(rest_logs(start, end)),
         "xp": _sum_ledger(start, end),
-        "best_streak": _best_streak(scores, start, end),
+        "best_streak": _best_streak(scores, start, end, rest_only),
         "study_minutes": _study_minutes(start, end),
     }
 

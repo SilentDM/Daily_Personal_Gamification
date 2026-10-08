@@ -26,6 +26,7 @@ INK_2 = "#c3c2b7"
 MUTED = "#898781"
 GRID = ft.Colors.with_opacity(0.08, ft.Colors.WHITE)
 EMPTY = ft.Colors.with_opacity(0.05, ft.Colors.WHITE)
+REST = "#6b6a66"   # neutral gray: answered "Rest", not a score (never a hue, so it never reads as good/bad)
 GOOD, BAD = "#0ca30c", "#d03b3b"
 BAR_W = 20
 
@@ -57,7 +58,9 @@ def scale_legend(prefix="Score"):
     items += [ft.Text("0 → 10", size=11, color=MUTED), ft.Container(width=10),
               ft.Container(width=14, height=14, bgcolor=EMPTY, border_radius=3,
                            border=ft.Border.all(1, ft.Colors.with_opacity(0.15, ft.Colors.WHITE))),
-              ft.Text("no entry", size=11, color=MUTED)]
+              ft.Text("no entry", size=11, color=MUTED), ft.Container(width=10),
+              ft.Container(width=14, height=14, bgcolor=REST, border_radius=3),
+              ft.Text("rest", size=11, color=MUTED)]
     return ft.Row(items, spacing=4)
 
 
@@ -158,7 +161,8 @@ class GraphsView(ft.Column):
         tiles = [
             self._tile("Average score", f"{avg:.1f} / 10" if avg is not None else "—",
                        *delta(avg, prev["avg_score"], lambda v: f"{v:.1f}"), hint="Mean of the daily averages"),
-            self._tile("Days logged", f"{cur['days_logged']} / {cur['days_total']}",
+            self._tile("Days logged", f"{cur['days_logged']} / {cur['days_total']}" +
+                       (f" · {cur['rest_days']} rest" if cur.get("rest_days") else ""),
                        *delta(cur["days_logged"], prev["days_logged"], lambda v: f"{v:g} day{'s' if v != 1 else ''}")),
             self._tile("XP earned", f"{cur['xp']:+.0f}", *delta(cur["xp"], prev["xp"], lambda v: f"{v:.0f} XP"),
                        hint="Habits, quests, studies, reviews and events"),
@@ -242,13 +246,16 @@ class GraphsView(ft.Column):
                                                        no_wrap=True),
                                        width=cell, alignment=ft.Alignment.CENTER))
         grid = [ft.Row(header, spacing=gap)]
-        for name, neg, values, statuses in rows:
+        for name, neg, values, statuses, rests in rows:
             cells = [ft.Container(content=ft.Text(name, size=12, color=INK_2, no_wrap=True,
                                                   overflow=ft.TextOverflow.ELLIPSIS), width=170)]
-            for (label, first, last), v, st in zip(columns, values, statuses):
+            for (label, first, last), v, st, rested in zip(columns, values, statuses, rests):
                 when = f"{first:%a %d/%m}" if first == last else f"week of {first:%d/%m}"
-                tip = f"{name} • {when}: " + (f"{st} ({v:.1f})" if v is not None else "no entry")
-                cells.append(ft.Container(width=cell, height=min(cell, 26), bgcolor=seq_color(v), border_radius=3,
+                tip = f"{name} • {when}: " + (f"{st} ({v:.1f})" if v is not None else
+                                              ("rest day" if rested == 1 else f"{rested} rest days") if rested
+                                              else "no entry")
+                color = seq_color(v) if v is not None else (REST if rested else EMPTY)
+                cells.append(ft.Container(width=cell, height=min(cell, 26), bgcolor=color, border_radius=3,
                                           tooltip=tip))
             grid.append(ft.Row(cells, spacing=gap))
         unit = "week (average)" if an.uses_weeks(key) else "day"
@@ -261,16 +268,17 @@ class GraphsView(ft.Column):
         ranking = an.habit_ranking(key, today)
         width = 260
         rows = []
-        for name, neg, avg, days, total in ranking:
+        for name, neg, avg, days, total, rested in ranking:
             rows.append(ft.Row([
                 ft.Text(name + (" (vice)" if neg else ""), size=12, color=INK_2, width=150, no_wrap=True,
                         overflow=ft.TextOverflow.ELLIPSIS),
                 ft.Container(content=ft.Container(width=max(3, width * avg / 10), height=12, bgcolor=SERIES_1,
                                                   border_radius=ft.BorderRadius.only(top_right=4, bottom_right=4)),
                              width=width, bgcolor=EMPTY, border_radius=4, alignment=ft.Alignment.CENTER_LEFT,
-                             tooltip=f"{name}: average {avg:.1f} on {days} of {total} days"),
+                             tooltip=f"{name}: average {avg:.1f} on {days} of {total} days" +
+                                     (f" ({rested} rest)" if rested else "")),
                 ft.Text(f"{avg:.1f}", size=12, color=INK, weight=ft.FontWeight.W_600, width=32),
-                ft.Text(f"{days}/{total} days", size=11, color=MUTED),
+                ft.Text(f"{days}/{total} days" + (f" • {rested} rest" if rested else ""), size=11, color=MUTED),
             ], spacing=8))
         sub = "Average score, strongest first; the bottom ones are where a little attention pays off most."
         return card("Habit ranking", sub, ft.Column(rows, spacing=8), expand=True)
@@ -318,13 +326,15 @@ class GraphsView(ft.Column):
             cells = [ft.Container(content=ft.Text(DAY_NAMES[di] if di in (0, 2, 4) else "", size=9, color=MUTED),
                                   width=30)]
             for wk in weeks:
-                d, v, future = wk[di]
+                d, v, future, rest_only = wk[di]
                 cells.append(ft.Container(width=size, height=size, border_radius=2,
-                                          bgcolor=ft.Colors.TRANSPARENT if future else seq_color(v),
-                                          tooltip=None if future else (f"{d:%a %d/%m/%Y}: {v:.1f}" if v is not None
+                                          bgcolor=ft.Colors.TRANSPARENT if future else (
+                                              REST if rest_only else seq_color(v)),
+                                          tooltip=None if future else (f"{d:%a %d/%m/%Y}: rest day" if rest_only
+                                                                       else f"{d:%a %d/%m/%Y}: {v:.1f}" if v is not None
                                                                        else f"{d:%a %d/%m/%Y}: no entries")))
             day_rows.append(ft.Row(cells, spacing=gap))
-        logged = sum(1 for wk in weeks for d, v, f in wk if v is not None)
+        logged = sum(1 for wk in weeks for d, v, f, r in wk if v is not None or r)
         return card("Year map", f"Last 12 months, one square per day • {logged} days logged",
                     ft.Column([ft.Row([ft.Column([ft.Row(month_row, spacing=gap), *day_rows], spacing=gap)],
                                       scroll=ft.ScrollMode.AUTO), scale_legend("Daily score")], spacing=10))
