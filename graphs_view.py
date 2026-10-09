@@ -15,6 +15,7 @@ import flet_charts as fch
 import ai_gemini
 import ai_weekly
 import analytics as an
+import database as db
 from constants import SCORE_PASSING, DAY_NAMES
 
 SEQ = ["#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"]   # scores 0-2, 2-4, 4-6, 6-8, 8-10
@@ -168,7 +169,7 @@ class GraphsView(ft.Column):
                        hint="Habits, quests, studies, reviews and events"),
             self._tile("Best streak", f"{cur['best_streak']} day{'s' if cur['best_streak'] != 1 else ''}",
                        *delta(cur["best_streak"], prev["best_streak"], lambda v: f"{v:g} day{'s' if v != 1 else ''}"),
-                       hint=f"Consecutive days with an average of {SCORE_PASSING:g} or more"),
+                       hint=f"Consecutive days with an average of {db.passing_score():g} or more"),
             self._tile("Study time", fmt_minutes(cur["study_minutes"]),
                        *delta(cur["study_minutes"], prev["study_minutes"], fmt_minutes),
                        hint="Time logged in study journal entries"),
@@ -213,8 +214,9 @@ class GraphsView(ft.Column):
         points = [fch.LineChartDataPoint(i, round(v, 2), tooltip=f"{label}: {v:.1f}")
                   for i, (label, _, v) in enumerate(series) if v is not None]
         n = len(series)
-        goal = fch.LineChartData(points=[fch.LineChartDataPoint(0, SCORE_PASSING, show_tooltip=False),
-                                         fch.LineChartDataPoint(n - 1, SCORE_PASSING, show_tooltip=False)],
+        target = db.passing_score()
+        goal = fch.LineChartData(points=[fch.LineChartDataPoint(0, target, show_tooltip=False),
+                                         fch.LineChartDataPoint(n - 1, target, show_tooltip=False)],
                                  color=MUTED, stroke_width=1, dash_pattern=[6, 4])
         main = fch.LineChartData(points=points, color=SERIES_1, stroke_width=2, curved=False,
                                  rounded_stroke_cap=True, below_line_bgcolor=ft.Colors.with_opacity(0.10, SERIES_1))
@@ -231,7 +233,7 @@ class GraphsView(ft.Column):
         latest = values[-1]
         unit = "week" if an.uses_weeks(key) else "day"
         sub = (f"Average per {unit} • latest {latest:.1f} • period average {sum(values) / len(values):.1f} • "
-               f"dashed line = goal {SCORE_PASSING:g}")
+               f"dashed line = goal {target:g}")
         return card("Daily score trend", sub, ft.Container(content=chart, height=230))
 
     # ------------------------------------------------------------ habit heatmap

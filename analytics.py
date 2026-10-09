@@ -183,9 +183,10 @@ def year_map(today: date = None):
 
 # ------------------------------------------------------------------ headline numbers
 def _best_streak(scores: dict, start: date, end: date, rest_only=frozenset()) -> int:
+    goal = db.passing_score()
     best = run = 0
     for d in _days(start, end):
-        if scores.get(d, 0) >= SCORE_PASSING or d in rest_only:
+        if scores.get(d, 0) >= goal or d in rest_only:
             run += 1
             best = max(best, run)
         else:

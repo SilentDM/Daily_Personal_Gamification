@@ -176,6 +176,7 @@ def init_db():
     _run_study_migrations(conn)
     _run_quest_migrations(conn)
     _run_document_migrations(conn)
+    _run_assistant_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -274,6 +275,22 @@ def move_activity(activity_id: int, direction: str):
     conn.close()
 
 # --- Daily Logs Operations ---
+def passing_score() -> float:
+    """Daily average needed for a streak day (Options; default SCORE_PASSING)."""
+    try:
+        return float(get_hud_settings().get("passing_score") or SCORE_PASSING)
+    except (TypeError, ValueError):
+        return SCORE_PASSING
+
+
+def rest_limit() -> int:
+    """Rest days allowed per habit per week (Options; default REST_LIMIT_PER_WEEK)."""
+    try:
+        return int(get_hud_settings().get("rest_limit") or REST_LIMIT_PER_WEEK)
+    except (TypeError, ValueError):
+        return REST_LIMIT_PER_WEEK
+
+
 def rest_days_used(activity_id: int, year: int, week: int, exclude_day: int = None) -> int:
     """How many Rest answers this habit has in that ISO week (optionally ignoring one day)."""
     conn = get_connection()
@@ -286,13 +303,13 @@ def rest_days_used(activity_id: int, year: int, week: int, exclude_day: int = No
 
 
 def can_rest(activity_id: int, year: int, week: int, day_idx: int) -> bool:
-    """Rest is for positive habits only, up to REST_LIMIT_PER_WEEK per habit per week."""
+    """Rest is for positive habits only, up to rest_limit() per habit per week."""
     conn = get_connection()
     row = conn.execute("SELECT is_negative FROM activities WHERE id = ?", (activity_id,)).fetchone()
     conn.close()
     if not row or row[0]:
         return False
-    return rest_days_used(activity_id, year, week, exclude_day=day_idx) < REST_LIMIT_PER_WEEK
+    return rest_days_used(activity_id, year, week, exclude_day=day_idx) < rest_limit()
 
 
 def save_log(activity_id: int, year: int, week: int, day_idx: int, status: str, score: int):
@@ -366,7 +383,8 @@ def streak_days():
             scores.append(score)
         else:
             per_day[day][1].append(status)
-    return {day: (sum(s) / len(s) >= SCORE_PASSING) if s else bool(rests)
+    goal = passing_score()
+    return {day: (sum(s) / len(s) >= goal) if s else bool(rests)
             for day, (s, rests) in per_day.items()}
 
 
@@ -1931,7 +1949,10 @@ def backup_db(keep: int = 14):
         except OSError:
             pass
 
-    extra = os.getenv("GAMIFICATION_BACKUP_DIR")
+    try:
+        extra = get_hud_settings().get("backup_dir") or os.getenv("GAMIFICATION_BACKUP_DIR")
+    except Exception:  # first run: settings table not created yet
+        extra = os.getenv("GAMIFICATION_BACKUP_DIR")
     if extra and Path(extra).is_dir():
         try:
             shutil.copy2(dst, Path(extra) / dst.name)
@@ -2244,6 +2265,49 @@ def _run_document_migrations(conn):
             new_expiration TEXT
         )
     """)
+
+
+def _run_assistant_migrations(conn):
+    """Telegram assistant: keys of proactive messages already sent (no duplicates across restarts)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS assistant_sent (
+            key TEXT PRIMARY KEY,
+            sent_at TEXT NOT NULL
+        )
+    """)
+
+
+def was_sent(key: str) -> bool:
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM assistant_sent WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def mark_sent(key: str):
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO assistant_sent (key, sent_at) VALUES (?, ?)",
+                 (key, datetime.now().isoformat(timespec="seconds")))
+    conn.execute("DELETE FROM assistant_sent WHERE sent_at < ?",
+                 ((datetime.now() - timedelta(days=90)).isoformat(timespec="seconds"),))
+    conn.commit()
+    conn.close()
+
+
+def max_ledger_id() -> int:
+    conn = get_connection()
+    n = conn.execute("SELECT COALESCE(MAX(id), 0) FROM xp_ledger").fetchone()[0]
+    conn.close()
+    return n
+
+
+def ledger_since(after_id: int):
+    """[(id, source, ref_key, amount)] XP ledger rows added after `after_id` (for achievement messages)."""
+    conn = get_connection()
+    rows = conn.execute("SELECT id, source, ref_key, amount FROM xp_ledger WHERE id > ? ORDER BY id",
+                        (after_id,)).fetchall()
+    conn.close()
+    return rows
 
 
 def _desktop_dir() -> Path:

@@ -43,7 +43,7 @@ def answered(log) -> bool:
 def score_color(score):
     if score is None:
         return ft.Colors.GREY_700
-    if score >= SCORE_GREEN:
+    if score >= db.passing_score():
         return ft.Colors.GREEN_ACCENT_700
     if score >= SCORE_ORANGE:
         return ft.Colors.ORANGE_ACCENT_700
@@ -102,7 +102,7 @@ class ScheduleView(ft.Column):
             if day_scores:
                 avg = sum(day_scores) / len(day_scores)
                 text.value = f"{avg:.1f} / 10"
-                text.color = ft.Colors.GREEN_ACCENT if avg >= SCORE_GREEN else (
+                text.color = ft.Colors.GREEN_ACCENT if avg >= db.passing_score() else (
                     ft.Colors.ORANGE_ACCENT if avg >= SCORE_ORANGE else ft.Colors.RED_ACCENT)
             else:
                 text.value, text.color = "- / 10", ft.Colors.GREY_500
@@ -470,8 +470,8 @@ class ScheduleView(ft.Column):
             used = db.rest_days_used(act[0], self.year, self.week, exclude_day=self.today_idx)
             tip = ("Rest day — doesn't count in any score • click again to clear" if selected else
                    f"Rest day: this habit doesn't apply today; no score impact • key R • "
-                   f"{REST_LIMIT_PER_WEEK - used} of {REST_LIMIT_PER_WEEK} left this week" if allowed else
-                   f"No rest days left this week ({REST_LIMIT_PER_WEEK} used)")
+                   f"{db.rest_limit() - used} of {db.rest_limit()} left this week" if allowed else
+                   f"No rest days left this week ({db.rest_limit()} used)")
             buttons.append(ft.Container(
                 content=ft.Icon(ft.Icons.BEDTIME_OUTLINED if not selected else ft.Icons.BEDTIME, size=16,
                                 color=ft.Colors.WHITE if selected else (ft.Colors.GREY_400 if allowed

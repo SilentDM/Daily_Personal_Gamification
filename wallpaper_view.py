@@ -233,7 +233,7 @@ class WallpaperView(ft.Row):
                               disabled=i == len(blocks) - 1, on_click=lambda e, idx=i: self._move_block(idx, 1)),
             ], spacing=0))
         insight_text = ai_insight.cached_today()
-        lang_dd = ft.Dropdown(label="Insight language", value=ai_insight.language(), width=220, dense=True,
+        lang_dd = ft.Dropdown(label="AI & messages language", value=ai_insight.language(), width=240, dense=True,
                               options=[ft.DropdownOption(lang) for lang in ai_insight.LANGUAGES],
                               on_select=lambda e: db.set_hud_setting(ai_insight.SETTING_LANGUAGE, e.control.value))
         block_controls = rows + [lang_dd]

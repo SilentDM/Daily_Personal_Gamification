@@ -73,12 +73,26 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Backgrounds:** pure black, the project image, or **a new image each day from a folder** you choose — images fill the screen without being stretched.
 * **Live preview** in the tab before applying, and **Pause & restore**: your original wallpaper is kept on the first apply and comes back whenever you pause the HUD.
 
-### ⚡ 6. Quality of Life & Storage
+### 🤖 6. Telegram Assistant (optional)
+* **A real assistant in your pocket:** chat by **text or voice message** — "how's my day?", "mark gym as ok", "rest day for stretching today", "add dentist friday 2:30pm", "I studied docker 40 minutes: volumes", "what expires this month?". Gemini reads your real data and acts through safe tools.
+* **It never deletes anything** (there is no tool for it), never sees document numbers, and only talks to **your** chat, paired with a one-time code.
+* **Replies in text, voice or both**, with a **female or male** neural voice (Brazilian Portuguese or English, via `edge-tts`).
+* **Messages it sends you:** a **morning briefing** (your wake-up message: events, reviews, documents, next quest step), **calendar reminders** at each event's own reminder time, **documents expiring**, **study reviews due**, an **evening check-in with answer buttons** (tap to mark each habit) and **achievements** (level up, streak milestones, quests completed, chapters mastered).
+* **Quiet hours** hold back non-urgent messages; nothing is ever sent twice, even after a restart.
+* Uses long polling (no server, no open port). It works while the app is running (it lives in the tray).
+
+### ⚙️ 7. Options
+* **AI & messages language** (Português / English), **start with Windows**, close-to-tray, auto-update on/off.
+* **Turn tabs off:** Graphs, Quests, Study, Wallpaper, Calendar and Documents can be disabled — a disabled tab is **not loaded at all** and its background work stops (restart button included).
+* **Scoring rules:** the passing score (streak / green day) and rest days per habit per week.
+* **Quiet hours**, extra **backup folder**, open the data folder, CSV export, Gemini settings and the whole Telegram setup.
+
+### ⚡ 8. Quality of Life & Storage
 * **⚡ Quick-Fill Today:** Automatically marks all unlogged tasks for today (`Ok` for positive habits, `Resisted` for bad habits) in one click.
 * **💾 One-Click CSV Export:** Generates a timestamped CSV on your Desktop.
 * **🔒 AppData Persistence:** Stores SQLite data in `%APPDATA%\Daily_Personal_Gamification`, so updates never erase your data.
-* **🗄️ Daily Backups:** One backup per day (last 14 kept) in the `backups` folder; set `GAMIFICATION_BACKUP_DIR` to also copy it elsewhere (e.g. OneDrive).
-* **🔄 Auto-Update & Tray:** Fast-forwards from GitHub on launch, closes to the system tray, single instance only.
+* **🗄️ Daily Backups:** One backup per day (last 14 kept) in the `backups` folder; pick an extra folder in **Options → Data** to also copy it elsewhere (e.g. OneDrive).
+* **🔄 Auto-Update & Tray:** Fast-forwards from GitHub on launch (can be turned off), closes to the system tray, single instance only.
 
 ---
 
@@ -102,13 +116,21 @@ Daily_Personal_Gamification/
 ├── documents_view.py   # Document expiration tracker, renewals, PIN lock
 ├── wallpaper.py        # Wallpaper HUD: modular blocks, scaling, backgrounds, pause/restore
 ├── wallpaper_view.py   # HUD settings screen
+├── options_view.py     # Options tab: general, tabs on/off, scoring, quiet hours, data, AI, Telegram
+├── settings.py         # Typed app options with defaults (secrets live in the Credential Manager)
+├── assistant.py        # Telegram assistant: pairing, chat (text/voice) with Gemini tools, check-in buttons
+├── assistant_tools.py  # What the assistant can read and do (no delete tools, idempotent actions)
+├── notifier.py         # Proactive messages: briefing, calendar, documents, reviews, check-in, achievements
+├── messages.py         # Fixed message texts in Portuguese and English
+├── telegram_api.py     # Minimal Telegram Bot API client (httpx, long polling)
+├── tts.py              # Voice replies (edge-tts neural voices, falls back to text)
 ├── ai_gemini.py        # Small Gemini client: key in Credential Manager, model fallback
 ├── ai_review.py        # AI deep reviews: review packs and answer grading
 ├── ai_quest.py         # AI quest planner (no dates or deadlines)
 ├── ai_insight.py       # Insight of the day for the wallpaper (one Gemini call per day)
 ├── ai_weekly.py        # Weekly summary for the Graphs tab (one Gemini call per week)
 ├── ui_helpers.py       # Shared confirmation dialog
-├── tests/              # Database and AI tests (unittest, no network)
+├── tests/              # Database, AI and assistant tests (unittest, no network)
 ├── base_wallpaper.jpg  # Background image for the HUD
 └── requirements.txt
 ```
@@ -165,6 +187,14 @@ Tests use a temporary data folder, so your real database is never touched.
 
 > When a pack is generated, that chapter's journal and wrap-up are sent to Google's Gemini API. On the free tier, Google may use that content to improve its products.
 
+### 7. (Optional) Set up the Telegram assistant
+1. In Telegram, open **@BotFather**, send `/newbot` and follow the steps; copy the **token** it gives you.
+2. In the app, open **Options → Telegram assistant**, paste the token and click 💾 (it is checked, then stored in the Windows Credential Manager).
+3. Turn **Assistant on** and send `/start <code>` (the pairing code shown in Options) to your new bot. From then on it only answers you.
+4. Pick text or voice replies, the voice, and which messages you want. Chatting needs the Gemini key (step 6).
+
+> Your messages (and voice notes) are sent to Gemini to be understood; the replies' voice is generated by Microsoft's free Edge text-to-speech service.
+
 ---
 
 ## 🖥️ Running as a Silent Desktop Shortcut (Windows)
@@ -192,7 +222,8 @@ To launch the tracker directly from your desktop **without opening an ugly black
 * **Visualizations:** `flet-charts`
 * **Wallpaper / Tray:** `Pillow`, `pystray`
 * **Encryption:** `cryptography` (Fernet) + `keyring`
-* **AI (optional):** Google Gemini via `google-genai` (free tier, structured output with `pydantic`)
+* **AI (optional):** Google Gemini via `google-genai` (free tier, structured output with `pydantic`, function calling for the assistant)
+* **Assistant (optional):** Telegram Bot API over `httpx`, voice with `edge-tts`
 * **Database:** SQLite3 (Local & Persistent in `%APPDATA%`)
 
 ---

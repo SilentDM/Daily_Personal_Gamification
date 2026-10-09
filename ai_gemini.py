@@ -168,10 +168,14 @@ def _is_bad_key(exc) -> bool:
 
 
 # ------------------------------------------------------------------ generation
-def generate(prompt: str, system: str, schema=None, temperature: float = 0.4, max_output_tokens: int = 8192):
+def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_output_tokens: int = 8192,
+             tools=None, max_tool_calls: int = 8):
     """Asks Gemini, falling back across models. Returns (result, model_name).
 
+    `prompt` is a string or a list of contents/parts (e.g. text + an audio Part).
     With `schema` (a Pydantic model class) the result is a validated instance of it.
+    With `tools` (Python functions) Gemini may call them (automatic function calling) before answering;
+    tools that change data must be idempotent per request (see assistant_tools.ActionLog).
     Raises AIError / AINotConfigured with a user-facing message.
     """
     if not AVAILABLE:
@@ -186,6 +190,9 @@ def generate(prompt: str, system: str, schema=None, temperature: float = 0.4, ma
         max_output_tokens=max_output_tokens,
         response_mime_type="application/json" if schema else None,
         response_schema=schema,
+        tools=list(tools) if tools else None,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=max_tool_calls)
+        if tools else None,
     )
     with _request_lock:
         client = _client(key)

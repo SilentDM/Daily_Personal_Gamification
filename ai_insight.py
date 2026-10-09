@@ -15,7 +15,8 @@ log = logging.getLogger("gamification")
 
 SETTING_TEXT = "insight_text"
 SETTING_DATE = "insight_date"
-SETTING_LANGUAGE = "insight_language"
+SETTING_LANGUAGE = "ai_language"
+OLD_SETTING_LANGUAGE = "insight_language"
 LANGUAGES = ["Português (Brasil)", "English"]
 MAX_CHARS = 220
 
@@ -36,7 +37,8 @@ Write in {language}."""
 
 
 def language() -> str:
-    lang = db.get_hud_settings().get(SETTING_LANGUAGE, LANGUAGES[0])
+    settings = db.get_hud_settings()
+    lang = settings.get(SETTING_LANGUAGE) or settings.get(OLD_SETTING_LANGUAGE) or LANGUAGES[0]
     return lang if lang in LANGUAGES else LANGUAGES[0]
 
 

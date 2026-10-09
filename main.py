@@ -1,18 +1,37 @@
-try:
-    from updater import check_for_updates
-    check_for_updates()
-except Exception:
-    pass
-
 import sys as _sys
 import ctypes as _ctypes
+import time as _time
 
-# Single-instance guard (after the updater, so an update restart is never blocked)
+RESTART_FLAG = "--restarted"
+_restarting = RESTART_FLAG in _sys.argv
+
+try:
+    import settings as _settings
+    _auto_update = _settings.flag("auto_update")
+except Exception:  # first run: no database yet
+    _auto_update = True
+
+if _auto_update and not _restarting:
+    try:
+        from updater import check_for_updates
+        check_for_updates()
+    except Exception:
+        pass
+
+# Single-instance guard (after the updater, so an update restart is never blocked).
+# After "Restart now" the old instance needs a moment to exit, so the new one waits for it.
 _MUTEX = None
 if _sys.platform == "win32":
     _k32 = _ctypes.WinDLL("kernel32", use_last_error=True)
-    _MUTEX = _k32.CreateMutexW(None, False, "Local\\DailyGamificationTracker")
-    if _ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+    _already = False
+    for _attempt in range(60 if _restarting else 1):
+        _MUTEX = _k32.CreateMutexW(None, False, "Local\\DailyGamificationTracker")
+        _already = _ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
+        if not _already:
+            break
+        _k32.CloseHandle(_MUTEX)
+        _time.sleep(0.25)
+    if _already:
         try:  # bring the running instance to the front instead
             _hwnd = _ctypes.windll.user32.FindWindowW(None, "Personal Gamification Tracker")
             if _hwnd:
@@ -33,9 +52,15 @@ import ctypes
 import pystray
 import winsound
 from datetime import datetime, date, timedelta
+from pathlib import Path
 from PIL import Image, ImageDraw
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper, flush_wallpaper_update, get_blocks as get_hud_blocks
+import wallpaper
 import ai_insight
+import settings
+import assistant_tools
+from assistant import assistant
+from notifier import Notifier
 from applog import setup_logging
 
 from schedule_view import ScheduleView, SETTING_REMINDED, reminder_time as schedule_reminder_time
@@ -45,6 +70,7 @@ from study_view import StudyView
 from wallpaper_view import WallpaperView
 from calendar_view import CalendarView
 from documents_view import DocumentsView
+from options_view import OptionsView
 
 APP_TITLE = "Personal Gamification Tracker"
 log = setup_logging()
@@ -92,13 +118,17 @@ def main(page: ft.Page):
     def on_window_event(e):
         event_val = getattr(e, "data", None) or getattr(e, "type", None)
         if event_val in ("close", ft.WindowEventType.CLOSE):
-            hide_window_to_tray()
+            if settings.flag("close_to_tray"):
+                hide_window_to_tray()
+            else:
+                clean_quit()
 
     page.window.on_event = on_window_event
 
     # 2. Foolproof Clean Exit: Destroys GUI client and kills entire process tree
     def clean_quit():
         global tray_icon_instance
+        assistant.stop()
         try:
             flush_wallpaper_update()  # do not lose a pending wallpaper refresh
         except Exception:
@@ -142,60 +172,74 @@ def main(page: ft.Page):
         for task in initial_tasks:
             db.add_activity(task)
 
-    # Views
+    def restart_app():
+        """Starts a fresh copy (it waits for this one to exit) and quits; used after changing tabs."""
+        script = str(Path(_sys.argv[0]).resolve())
+        # Through "cmd /c start": the new copy is not our child, so clean_quit's taskkill /T spares it
+        subprocess.run(["cmd", "/c", "start", "", _sys.executable, script, RESTART_FLAG],
+                       cwd=str(Path(script).parent), creationflags=0x08000000, timeout=15)
+        clean_quit()
+
+    # Views: Schedule is always on; the others only load when enabled in Options
+    enabled = settings.enabled_tabs()
+    wallpaper.set_enabled("wallpaper" in enabled)
     schedule_view = ScheduleView(page)
-    graphs_view = GraphsView(page)
-    todo_view = TodoView(page)
-    study_view = StudyView(page)
-    wallpaper_view = WallpaperView(page)
-    calendar_view = CalendarView(page)
-    documents_view = DocumentsView(page)
+    graphs_view = GraphsView(page) if "graphs" in enabled else None
+    todo_view = TodoView(page) if "quests" in enabled else None
+    study_view = StudyView(page) if "study" in enabled else None
+    wallpaper_view = WallpaperView(page) if "wallpaper" in enabled else None
+    calendar_view = CalendarView(page) if "calendar" in enabled else None
+    documents_view = DocumentsView(page) if "documents" in enabled else None
+    options_view = OptionsView(page, assistant=assistant, on_restart=restart_app, loaded_tabs=enabled)
+
+    icons = ft.Icons
+    tabs = [t for t in [
+        (schedule_view, lambda: schedule_view.render(),
+         icons.CALENDAR_VIEW_WEEK_OUTLINED, icons.CALENDAR_VIEW_WEEK, "Schedule"),
+        (graphs_view, lambda: graphs_view.refresh(), icons.BAR_CHART_OUTLINED, icons.BAR_CHART, "Graphs"),
+        (todo_view, lambda: todo_view.render(), icons.CHECKLIST_OUTLINED, icons.CHECKLIST, "Quests"),
+        (study_view, lambda: study_view.refresh_list(), icons.SCHOOL_OUTLINED, icons.SCHOOL, "Study"),
+        (wallpaper_view, lambda: wallpaper_view.render(), icons.WALLPAPER_OUTLINED, icons.WALLPAPER, "Wallpaper"),
+        (calendar_view, lambda: calendar_view.render(),
+         icons.CALENDAR_MONTH_OUTLINED, icons.CALENDAR_MONTH, "Calendar"),
+        (documents_view, lambda: documents_view.render(),
+         icons.FOLDER_SHARED_OUTLINED, icons.FOLDER_SHARED, "Documents"),
+        (options_view, lambda: options_view.render(), icons.SETTINGS_OUTLINED, icons.SETTINGS, "Options"),
+    ] if t[0] is not None]
 
     def on_nav_change(e):
         show_tab(e.control.selected_index)
 
     def show_tab(idx: int):
         rail.selected_index = idx
-        schedule_view.visible = (idx == 0)
-        graphs_view.visible = (idx == 1)
-        todo_view.visible = (idx == 2)
-        study_view.visible = (idx == 3)
-        wallpaper_view.visible = (idx == 4)
-        calendar_view.visible = (idx == 5)
-        documents_view.visible = (idx == 6)
-
-        if idx == 0:
-            schedule_view.render()
-        elif idx == 1:
-            graphs_view.refresh()
-        elif idx == 2:
-            todo_view.render()
-        elif idx == 3:
-            study_view.refresh_list()
-        elif idx == 4:
-            wallpaper_view.render()
-        elif idx == 5:
-            calendar_view.render()
-        elif idx == 6:
-            documents_view.render()
-
+        for i, tab in enumerate(tabs):
+            tab[0].visible = (i == idx)
+        tabs[idx][1]()
         page.update()
 
-    # 6-Tab Navigation Rail with Power-Off button at the bottom
+    def refresh_visible():
+        """Re-renders what is on screen after the Telegram assistant changed data (runs in its thread)."""
+        try:
+            schedule_view.render()
+            schedule_view.update_gamification_stats()
+            for view, refresh, *_ in tabs[1:]:
+                if view.visible:
+                    refresh()
+            update_desktop_wallpaper()
+            page.update()
+        except Exception:
+            log.exception("refresh after an assistant action failed")
+
+    assistant_tools.on_data_changed(refresh_visible)
+
+    # Navigation Rail with Power-Off button at the bottom
     rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
         min_width=100,
         min_extended_width=160,
-        destinations=[
-            ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_VIEW_WEEK_OUTLINED, selected_icon=ft.Icons.CALENDAR_VIEW_WEEK, label="Schedule"),
-            ft.NavigationRailDestination(icon=ft.Icons.BAR_CHART_OUTLINED, selected_icon=ft.Icons.BAR_CHART, label="Graphs"),
-            ft.NavigationRailDestination(icon=ft.Icons.CHECKLIST_OUTLINED, selected_icon=ft.Icons.CHECKLIST, label="Quests"),
-            ft.NavigationRailDestination(icon=ft.Icons.SCHOOL_OUTLINED, selected_icon=ft.Icons.SCHOOL, label="Study"),
-            ft.NavigationRailDestination(icon=ft.Icons.WALLPAPER_OUTLINED, selected_icon=ft.Icons.WALLPAPER, label="Wallpaper"),
-            ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_MONTH_OUTLINED, selected_icon=ft.Icons.CALENDAR_MONTH, label="Calendar"),
-            ft.NavigationRailDestination(icon=ft.Icons.FOLDER_SHARED_OUTLINED, selected_icon=ft.Icons.FOLDER_SHARED, label="Documents"),
-        ],
+        destinations=[ft.NavigationRailDestination(icon=icon, selected_icon=selected, label=label)
+                      for _, _, icon, selected, label in tabs],
         trailing=ft.Container(
             content=ft.IconButton(
                 icon=ft.Icons.POWER_SETTINGS_NEW,
@@ -218,20 +262,7 @@ def main(page: ft.Page):
     page.on_keyboard_event = on_keyboard
 
     page.add(
-        ft.Row(
-            [
-                rail,
-                ft.VerticalDivider(width=1),
-                schedule_view,
-                graphs_view,
-                todo_view,
-                study_view,
-                wallpaper_view,
-                calendar_view,
-                documents_view
-            ],
-            expand=True
-        )
+        ft.Row([rail, ft.VerticalDivider(width=1), *[t[0] for t in tabs]], expand=True)
     )
 
     update_desktop_wallpaper()
@@ -261,7 +292,8 @@ def main(page: ft.Page):
         def mark_done(e):
             db.toggle_event_completion(event_id, date_str)
             page.pop_dialog()
-            calendar_view.render()
+            if calendar_view:
+                calendar_view.render()
             schedule_view.update_gamification_stats()
             update_desktop_wallpaper()
             page.update()
@@ -294,6 +326,9 @@ def main(page: ft.Page):
             return f"'{doc['title']}' expires in {doc['days_left']} days ({exp:%d/%m/%Y})."
         return f"'{doc['title']}' expires on {exp:%d/%m/%Y} — time to plan the renewal."
 
+    assistant.start()  # Telegram (only when turned on in Options and a token is saved)
+    notifier = Notifier(assistant, checkin_time=schedule_reminder_time)
+
     def reminder_loop():
         last_checked_day = date.today()
         last_checked_hour = datetime.now().hour
@@ -312,7 +347,8 @@ def main(page: ft.Page):
                     last_checked_hour = now.hour
                     schedule_view.render()
                     schedule_view.calculate_daily_scores()
-                    calendar_view.render()
+                    if calendar_view:
+                        calendar_view.render()
                     update_desktop_wallpaper()
                     page.update()
 
@@ -320,7 +356,8 @@ def main(page: ft.Page):
                 elif now.hour != last_checked_hour:
                     last_checked_hour = now.hour
                     update_desktop_wallpaper()
-                    ai_review.retry_pending(on_done=study_view._ai_done)  # queued/failed AI review packs
+                    if study_view:
+                        ai_review.retry_pending(on_done=study_view._ai_done)  # queued/failed AI review packs
 
                 # 3. Nightly check-in reminder (once a day, only if something is still unmarked)
                 remind_at = schedule_reminder_time()
@@ -339,11 +376,11 @@ def main(page: ft.Page):
                 # 4. Documents: renewal quests + tray reminders at milestones (08:00-22:00)
                 if time.monotonic() >= next_doc_check:
                     next_doc_check = time.monotonic() + 3600
-                    if db.sync_renewal_quests():
+                    if documents_view and db.sync_renewal_quests() and todo_view:
                         todo_view.render()
-                    if any(b["id"] == "insight" and b["on"] for b in get_hud_blocks()):
+                    if wallpaper_view and any(b["id"] == "insight" and b["on"] for b in get_hud_blocks()):
                         ai_insight.ensure_today(on_ready=update_desktop_wallpaper)  # once a day, background
-                    if 8 <= now.hour < 22:
+                    if documents_view and 8 <= now.hour < 22:
                         for doc, stage in db.get_doc_notifications():
                             try:
                                 tray_icon_instance.notify(doc_reminder_text(doc, stage), "Document reminder")
@@ -351,7 +388,12 @@ def main(page: ft.Page):
                             except Exception:
                                 log.exception("document notification failed")
 
-                # 5. Calendar reminders (each event has its own lead time) and start alarms
+                # 5. Telegram assistant: briefing, reminders, check-in, achievements (no-op when off)
+                notifier.tick(now)
+
+                # 6. Calendar reminders (each event has its own lead time) and start alarms
+                if not calendar_view:
+                    continue
                 tomorrow = today + timedelta(days=1)
                 done = db.get_completed_events(today_str, tomorrow.isoformat())
                 for day_events in db.get_events_between(today, tomorrow).values():

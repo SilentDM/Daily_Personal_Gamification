@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import database as db
-from constants import SCORE_PASSING, SCORE_ORANGE
+from constants import SCORE_ORANGE
 
 log = logging.getLogger("gamification")
 
@@ -279,8 +279,9 @@ def _block(ctx, bid, data, width):
         if avg is None:
             status, color, txt = "NO ENTRIES YET", (160, 170, 185, 255), "Today: - / 10"
         else:
-            status = "PASSING" if avg >= SCORE_PASSING else ("NEUTRAL" if avg >= SCORE_ORANGE else "NEEDS FOCUS")
-            color = (0, 255, 180, 255) if avg >= SCORE_PASSING else (
+            goal = db.passing_score()
+            status = "PASSING" if avg >= goal else ("NEUTRAL" if avg >= SCORE_ORANGE else "NEEDS FOCUS")
+            color = (0, 255, 180, 255) if avg >= goal else (
                 (255, 180, 0, 255) if avg >= SCORE_ORANGE else (255, 85, 85, 255))
             txt = f"Today: {avg:.1f} / 10"
         streak = data.get("streak") or 0
@@ -505,10 +506,20 @@ def _run_update():
         render_wallpaper()
 
 
+_enabled = True  # False when the Wallpaper tab is turned off in Options: the HUD is left alone
+
+
+def set_enabled(on: bool):
+    global _enabled
+    _enabled = bool(on)
+
+
 def request_wallpaper_update(delay: float = 2.0):
     """Schedules a wallpaper refresh in a background thread. Calls made within
     `delay` seconds are merged into a single render (the UI never blocks)."""
     global _timer
+    if not _enabled:
+        return
     with _timer_lock:
         if _timer is not None:
             _timer.cancel()
