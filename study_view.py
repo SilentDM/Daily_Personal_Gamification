@@ -24,7 +24,18 @@ STAGE_ICONS = {
     "Mastered": ft.Icons.MILITARY_TECH,
 }
 MINUTE_OPTIONS = [0, 15, 30, 45, 60, 90, 120, 180, 240]
-FILTERS = ("active", "mastered", "all")
+FILTERS = {  # sidebar filter -> which chapters it shows
+    "active": lambda c: c["status"] != "Mastered",
+    "mastered": lambda c: c["status"] == "Mastered",
+    "reviews": lambda c: c["status"] == "Mastered" and c["reviews_due"] > 0,
+    "all": lambda c: True,
+}
+FILTER_EMPTY = {
+    "active": "No chapters in progress.\nAdd one above!",
+    "mastered": "Nothing mastered yet — keep going!",
+    "reviews": "No reviews due today. 🎉",
+    "all": "No chapters here yet.\nAdd one above!",
+}
 REVIEW_COLOR = ft.Colors.TEAL_ACCENT_400
 
 DEFAULT_ELI5 = """• What is it?
@@ -436,11 +447,8 @@ class StudyView(ft.Row):
     # ------------------------------------------------------------ data helpers
     def _chapters(self):
         chapters = db.get_study_sessions()
-        if self.filter == "active":
-            return chapters, [c for c in chapters if c["status"] != "Mastered" or c["reviews_due"]]
-        if self.filter == "mastered":
-            return chapters, [c for c in chapters if c["status"] == "Mastered"]
-        return chapters, chapters
+        keep = FILTERS.get(self.filter, FILTERS["all"])
+        return chapters, [c for c in chapters if keep(c)]
 
     def _selected(self, chapters):
         return next((c for c in chapters if c["id"] == self.selected_session_id), None)
@@ -509,21 +517,20 @@ class StudyView(ft.Row):
                 tooltip=", ".join(r["topic"] for r in due[:5]),
                 on_click=lambda e: open_review_dialog(self.app_page, due[0], on_done=self._changed),
             ))
-        n_active = sum(1 for c in chapters if c["status"] != "Mastered")
-        n_mastered = len(chapters) - n_active
+        counts = {f: sum(1 for c in chapters if keep(c)) for f, keep in FILTERS.items()}
+        labels = {"active": f"Active {counts['active']}", "mastered": f"Mastered {counts['mastered']}",
+                  "reviews": f"Reviews {counts['reviews']}", "all": "All"}
         controls.append(ft.SegmentedButton(
-            segments=[ft.Segment(value="active", label=ft.Text(f"Active {n_active}", size=12, no_wrap=True)),
-                      ft.Segment(value="mastered", label=ft.Text(f"Mastered {n_mastered}", size=12, no_wrap=True)),
-                      ft.Segment(value="all", label=ft.Text("All", size=12, no_wrap=True))],
+            segments=[ft.Segment(value=f, label=ft.Text(labels[f], size=11, no_wrap=True)) for f in FILTERS],
             selected=[self.filter], show_selected_icon=False,
+            style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=2)),  # four labels fit the sidebar
             on_change=lambda e: self._set_filter(e.control.selected[0]) if e.control.selected else None,
         ))
         controls.append(ft.Divider(color=ft.Colors.GREY_800, height=1))
 
         tiles = [self._tile(c) for c in visible]
         if not tiles:
-            tiles = [ft.Text("No chapters here yet.\nAdd one above!" if self.filter != "mastered"
-                             else "Nothing mastered yet — keep going!", color=ft.Colors.GREY_500, size=13)]
+            tiles = [ft.Text(FILTER_EMPTY.get(self.filter, FILTER_EMPTY["all"]), color=ft.Colors.GREY_500, size=13)]
         controls.append(ft.Column(tiles, spacing=6, scroll=ft.ScrollMode.AUTO, expand=True))
         self.sidebar.controls = controls
 
