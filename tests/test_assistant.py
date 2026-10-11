@@ -21,6 +21,7 @@ class FakeBot:
 
     def __init__(self, *a, **kw):
         self.sent, self.voices, self.edits, self.answers, self.actions = [], [], [], [], []
+        self.durations = []
 
     def get_me(self):
         return {"username": "test_bot"}
@@ -33,8 +34,9 @@ class FakeBot:
         self.sent.append((str(chat_id), text, buttons))
         return {"message_id": len(self.sent)}
 
-    def send_voice(self, chat_id, mp3, caption=None):
+    def send_voice(self, chat_id, mp3, caption=None, duration=None):
         self.voices.append((str(chat_id), mp3, caption))
+        self.durations.append(duration)
 
     def edit_text(self, chat_id, message_id, text, buttons=None):
         self.edits.append((message_id, text, buttons))
@@ -116,6 +118,14 @@ class SettingsTests(DbTestCase):
         db.mark_sent("x")
         db.mark_sent("x")
         self.assertTrue(db.was_sent("x"))
+
+
+    def test_mp3_duration_from_frames(self):
+        import tts
+        # MPEG-2 layer III, 48 kbps, 24 kHz mono (what edge-tts produces): 144-byte frames of 24 ms
+        frame = bytes([0xFF, 0xF3, 0x64, 0xC4]) + bytes(140)
+        self.assertAlmostEqual(tts.mp3_duration(b"ID3" + bytes(7) + frame * 400), 9.6, places=3)
+        self.assertEqual(tts.mp3_duration(b""), 0)
 
 
 # ---------------------------------------------------------------------- tools
@@ -208,6 +218,7 @@ class ChatTests(AssistantTestCase):
         settings.set("tg_reply_mode", "both")
         self.a.handle_update(text_update("oi"))
         self.assertEqual(self.bot.voices[-1][2], "Tudo certo!")  # caption carries the text
+        self.assertIsNotNone(self.bot.durations[-1])  # Telegram needs it to play MP3 to the end
 
     def test_voice_falls_back_to_text(self):
         settings.set("tg_reply_mode", "voice")

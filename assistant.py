@@ -179,7 +179,7 @@ class Assistant:
                 mp3 = self._synthesize(text, messages.lang(), settings.get("tg_voice"))
                 if mp3:
                     caption = text if mode == "both" and len(text) <= 1024 else None
-                    self.bot.send_voice(chat, mp3, caption=caption)
+                    self.bot.send_voice(chat, mp3, caption=caption, duration=tts.mp3_duration(mp3))
                     if mode == "both" and caption is None:
                         self.bot.send_message(chat, text)
                     return True

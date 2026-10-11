@@ -4,6 +4,7 @@ The bot token lives in the Windows Credential Manager, never in the database.
 """
 import json
 import logging
+import math
 
 import httpx
 
@@ -108,9 +109,11 @@ class Bot:
     def answer_callback(self, callback_id: str, text: str = None):
         return self.call("answerCallbackQuery", callback_query_id=callback_id, text=text)
 
-    def send_voice(self, chat_id, mp3: bytes, caption: str = None):
+    def send_voice(self, chat_id, mp3: bytes, caption: str = None, duration: float = None):
+        """`duration` (seconds) matters for MP3: without it Telegram guesses and cuts the audio short."""
         return self.call("sendVoice", files={"voice": ("reply.mp3", mp3, "audio/mpeg")}, chat_id=chat_id,
-                         caption=caption[:1024] if caption else None, timeout=60)
+                         caption=caption[:1024] if caption else None,
+                         duration=math.ceil(duration) if duration else None, timeout=60)
 
     def send_chat_action(self, chat_id, action: str = "typing"):
         try:
