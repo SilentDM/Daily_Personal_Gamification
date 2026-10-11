@@ -1,5 +1,4 @@
 import threading
-from pathlib import Path
 
 import flet as ft
 
@@ -7,6 +6,7 @@ import ai_gemini
 import ai_insight
 import database as db
 import wallpaper as wp
+from ui_helpers import update_ui
 
 
 class WallpaperView(ft.Row):
@@ -22,6 +22,7 @@ class WallpaperView(ft.Row):
         self.message = ""
         self._preview_lock = threading.Lock()
         self._preview_pending = False
+        self._preview_again = False
         self.controls = [
             ft.Container(content=self.settings_col, width=560, padding=ft.Padding.only(left=20, right=10, top=15,
                                                                                      bottom=20)),
@@ -35,7 +36,7 @@ class WallpaperView(ft.Row):
     # ------------------------------------------------------------ helpers
     def _update(self):
         if self.app_page:
-            self.app_page.update()
+            update_ui(self.app_page)
 
     def _set(self, key, value, refresh_settings=False):
         db.set_hud_setting(key, value)
@@ -45,24 +46,30 @@ class WallpaperView(ft.Row):
             self.refresh_preview()
 
     def refresh_preview(self):
-        """Re-renders the preview in the background (coalescing rapid changes)."""
+        """Re-renders the preview in the background. Changes made while a render runs are not lost:
+        one more render follows with the latest settings."""
         with self._preview_lock:
             if self._preview_pending:
+                self._preview_again = True
                 return
             self._preview_pending = True
+            self._preview_again = False
         self.preview_status.value = "Updating…"
         self._update()
 
         def work():
-            try:
-                png = wp.render_preview()
-                self.preview.content = ft.Image(src=png, fit=ft.BoxFit.CONTAIN, border_radius=8)
-                self.preview_status.value = "This is how your desktop will look."
-            except Exception as exc:
-                self.preview_status.value = f"Preview failed: {exc}"
-            finally:
+            while True:
+                try:
+                    png = wp.render_preview()
+                    self.preview.content = ft.Image(src=png, fit=ft.BoxFit.CONTAIN, border_radius=8)
+                    self.preview_status.value = "This is how your desktop will look."
+                except Exception as exc:
+                    self.preview_status.value = f"Preview failed: {exc}"
                 with self._preview_lock:
-                    self._preview_pending = False
+                    if not self._preview_again:
+                        self._preview_pending = False
+                        break
+                    self._preview_again = False  # settings changed meanwhile: render again
             try:
                 self._update()
             except Exception:

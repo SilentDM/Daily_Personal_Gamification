@@ -8,7 +8,7 @@ from datetime import date
 import flet as ft
 
 import database as db
-from ui_helpers import confirm_action
+from ui_helpers import confirm_action, update_ui
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
 CATEGORY_ICONS = {
@@ -215,7 +215,7 @@ class DocumentsView(ft.Column):
 
     def _update(self):
         if self.app_page:
-            self.app_page.update()
+            update_ui(self.app_page)
 
     def _changed(self, message: str = ""):
         self.feedback = message

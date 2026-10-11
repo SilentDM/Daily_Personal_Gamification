@@ -15,8 +15,9 @@ import flet_charts as fch
 import ai_gemini
 import ai_weekly
 import analytics as an
+from ui_helpers import update_ui
 import database as db
-from constants import SCORE_PASSING, DAY_NAMES
+from constants import DAY_NAMES
 
 SEQ = ["#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"]   # scores 0-2, 2-4, 4-6, 6-8, 8-10
 SERIES_1 = "#3987e5"
@@ -112,7 +113,7 @@ class GraphsView(ft.Column):
             if isinstance(c, ft.Container):
                 c.margin = ft.Margin.symmetric(horizontal=20)
         if self.app_page:
-            self.app_page.update()
+            update_ui(self.app_page)
         if not self.summary_error:  # once per week, in the background; no automatic retries after a failure
             ai_weekly.ensure(on_ready=self._summary_ready)
 

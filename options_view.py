@@ -12,6 +12,7 @@ import settings
 import telegram_api
 import tts
 from schedule_view import reminder_time as checkin_reminder_time
+from ui_helpers import update_ui
 
 HALF_HOURS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
 BRIEFING_TIMES = [t for t in HALF_HOURS if "05:00" <= t <= "11:30"]
@@ -38,7 +39,7 @@ class OptionsView(ft.Column):
     def _update(self):
         if self.app_page:
             try:
-                self.app_page.update()
+                update_ui(self.app_page)
             except Exception:
                 pass
 

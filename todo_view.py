@@ -8,7 +8,7 @@ import flet_charts as fch
 import ai_gemini
 import database as db
 from constants import QUEST_TYPES, QUEST_DIFFICULTY_XP, QUEST_REPEATS, XP_SUBQUEST, XP_QUEST_LOG, DAY_NAMES
-from ui_helpers import confirm_action
+from ui_helpers import confirm_action, update_ui
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
 TYPE_STYLE = {
@@ -163,7 +163,7 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
             except Exception as exc:
                 status.value, status.color = str(exc), ft.Colors.RED_ACCENT
             plan_btn.disabled = False
-            page.update()
+            update_ui(page)
 
         threading.Thread(target=work, daemon=True, name="ai-quest-plan").start()
 
@@ -250,7 +250,7 @@ class TodoView(ft.Row):
 
     def _update(self):
         if self.app_page:
-            self.app_page.update()
+            update_ui(self.app_page)
 
     def select(self, quest_id):
         self.selected_id = quest_id

@@ -7,7 +7,7 @@ import ai_gemini
 import ai_review
 import database as db
 from constants import XP_STUDY, XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS, DAY_NAMES
-from ui_helpers import confirm_action
+from ui_helpers import confirm_action, update_ui
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
 SOURCES = ["FIAP", "Alura", "Nano Courses", "Documentation / Book", "Self-Study"]
@@ -193,7 +193,7 @@ def _ai_question_card(page, topic, index, q, reveal_list):
                 controls = [ft.Text(str(exc), size=12, color=ft.Colors.RED_ACCENT)]
             result.controls = controls
             check_btn.disabled = False
-            page.update()
+            update_ui(page)
 
         import threading
         threading.Thread(target=work, daemon=True, name="ai-grade").start()
@@ -380,7 +380,7 @@ def open_ai_settings(page: ft.Page, on_change=None):
         def work():
             ok, msg = ai_gemini.test_connection(key_f.value)
             result.value, result.color = msg, ft.Colors.GREEN_ACCENT if ok else ft.Colors.RED_ACCENT
-            page.update()
+            update_ui(page)
 
         import threading
         threading.Thread(target=work, daemon=True, name="ai-test").start()
@@ -459,7 +459,7 @@ class StudyView(ft.Row):
 
     def _update(self):
         if self.app_page:
-            self.app_page.update()
+            update_ui(self.app_page)
 
     def _ai_done(self, session_id=None):
         """An AI pack finished (background thread): redraw only if it is on screen."""

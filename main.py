@@ -62,6 +62,7 @@ import assistant_tools
 from assistant import assistant
 from notifier import Notifier
 from applog import setup_logging
+from ui_helpers import update_ui, wake_ui
 
 from schedule_view import ScheduleView, SETTING_REMINDED, reminder_time as schedule_reminder_time
 from graphs_view import GraphsView
@@ -226,7 +227,7 @@ def main(page: ft.Page):
                 if view.visible:
                     refresh()
             update_desktop_wallpaper()
-            page.update()
+            update_ui(page)
         except Exception:
             log.exception("refresh after an assistant action failed")
 
@@ -435,6 +436,8 @@ def main(page: ft.Page):
                                 )
             except Exception:
                 log.exception("reminder loop failed")
+            finally:
+                wake_ui(page)  # send what this pass changed (alarm dialog, renders) right away
 
     threading.Thread(target=reminder_loop, daemon=True).start()
 
