@@ -34,6 +34,9 @@ XP_STUDY_LOG = 2.0   # first journal entry of the day per chapter
 XP_REVIEW = 5        # each spaced-repetition review completed
 XP_SUBQUEST = 2.0    # each subquest checked off
 XP_QUEST_LOG = 2.0   # first quest log entry of the day per quest
+XP_DIARY_EXERCISE = 2.0          # a guided diary exercise (once per kind per day)
+DIARY_XP_EXERCISES_PER_DAY = 3   # ...for up to 3 different exercises a day
+DIARY_EXERCISE_MIN_CHARS = 40    # some real writing, not just a word
 
 # Quests: no deadlines on purpose — nothing can be "late"; quests can be put on hold
 QUEST_TYPES = ["Main", "Side", "Epic"]

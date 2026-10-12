@@ -2,6 +2,7 @@
 
 Secrets (Gemini key, Telegram bot token) are NOT here: they live in the Windows Credential Manager.
 """
+import builtins
 import json
 import os
 import subprocess
@@ -17,6 +18,7 @@ OPTIONAL_TABS = {
     "graphs": "Graphs",
     "quests": "Quests",
     "study": "Study",
+    "diary": "Diary",
     "wallpaper": "Wallpaper",
     "calendar": "Calendar",
     "documents": "Documents",
@@ -24,8 +26,10 @@ OPTIONAL_TABS = {
 REPLY_MODES = {"text": "Text", "voice": "Voice", "both": "Voice + text"}
 VOICES = {"female": "Female", "male": "Male"}
 
+# The tabs that existed when "enabled_tabs" was the stored setting; newer tabs start enabled.
+_LEGACY_TABS = ("graphs", "quests", "study", "wallpaper", "calendar", "documents")
+
 DEFAULTS = {
-    "enabled_tabs": json.dumps(list(OPTIONAL_TABS)),
     "passing_score": "7.0",
     "rest_limit": "3",
     "close_to_tray": "true",
@@ -70,12 +74,22 @@ def flag(key: str) -> bool:
 
 
 # ------------------------------------------------------------------ tabs
-def enabled_tabs() -> list:
+def _disabled_tabs() -> "builtins.set":  # this module's own set() shadows the builtin
+    stored = db.get_hud_settings()
     try:
-        tabs = [t for t in json.loads(get("enabled_tabs")) if t in OPTIONAL_TABS]
+        if stored.get("disabled_tabs"):
+            return builtins.set(json.loads(stored["disabled_tabs"]))
+        if stored.get("enabled_tabs"):  # older format: a list of the enabled tabs
+            return builtins.set(_LEGACY_TABS) - builtins.set(json.loads(stored["enabled_tabs"]))
     except (ValueError, TypeError):
-        tabs = list(OPTIONAL_TABS)
-    return tabs
+        pass
+    return builtins.set()
+
+
+def enabled_tabs() -> list:
+    """Optional tabs that are on, in menu order. Stored as the *disabled* ones, so a new tab starts on."""
+    off = _disabled_tabs()
+    return [t for t in OPTIONAL_TABS if t not in off]
 
 
 def tab_enabled(tab: str) -> bool:
@@ -83,10 +97,10 @@ def tab_enabled(tab: str) -> bool:
 
 
 def set_tab_enabled(tab: str, on: bool):
-    tabs = [t for t in enabled_tabs() if t != tab]
-    if on:
-        tabs.append(tab)
-    set("enabled_tabs", json.dumps([t for t in OPTIONAL_TABS if t in tabs]))
+    off = _disabled_tabs() - {tab}
+    if not on:
+        off.add(tab)
+    set("disabled_tabs", json.dumps(sorted(off)))
 
 
 # ------------------------------------------------------------------ quiet hours

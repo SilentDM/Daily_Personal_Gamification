@@ -6,7 +6,7 @@ TEXTS = {
         "paired": "Pareado! 🎉 A partir de agora eu falo só com você. Pode me perguntar sobre o seu dia, marcar "
                   "hábitos, criar eventos, registrar estudos… Ou mande um áudio.",
         "help": "Exemplos: \"como está meu dia?\", \"marca academia como ok\", \"descanso no alongamento hoje\", "
-                "\"cria dentista sexta 14h30\", \"estudei docker 40 minutos: volumes\", \"o que vence este mês?\". "
+                "\"cria dentista sexta 14h30\", \"estudei docker 40 minutos: volumes\", \"o que vence este mês?\", \"anota no diário: hoje alonguei como nunca\". "
                 "Também entendo áudios. Eu nunca apago nada.",
         "no_ai": "Para conversar eu preciso da chave do Gemini (no app: Study → ✨ ou Options).",
         "ai_error": "Não consegui pensar agora ({error}). Tente de novo em instantes.",
@@ -35,7 +35,7 @@ TEXTS = {
         "paired": "Paired! 🎉 From now on I only talk to you. Ask about your day, mark habits, create events, "
                   "log studies… or send a voice message.",
         "help": "Examples: \"how's my day?\", \"mark gym as ok\", \"rest day for stretching today\", "
-                "\"add dentist friday 2:30pm\", \"I studied docker 40 minutes: volumes\", \"what expires this month?\". "
+                "\"add dentist friday 2:30pm\", \"I studied docker 40 minutes: volumes\", \"what expires this month?\", \"write in my diary: best stretching ever\". "
                 "I understand voice messages too. I never delete anything.",
         "no_ai": "To chat I need the Gemini key (in the app: Study → ✨ or Options).",
         "ai_error": "I couldn't think right now ({error}). Try again in a moment.",

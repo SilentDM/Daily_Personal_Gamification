@@ -1,17 +1,16 @@
 import flet as ft
 import database as db
+import settings
 from datetime import date, timedelta
 from ui_helpers import confirm_action
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 from constants import (
-    SCORE_GREEN,
     SCORE_ORANGE,
     POSITIVE_SCORES,
     NEGATIVE_SCORES,
     CATEGORIES,
     DAY_NAMES,
     REST_STATUS,
-    REST_LIMIT_PER_WEEK,
 )
 
 CATEGORY_COLORS = {
@@ -22,7 +21,7 @@ CATEGORY_COLORS = {
 }
 SHORT_LABELS = {"Excellent": "Exc", "Ok": "Ok", "A Little": "Little", "Skipped": "Skip",
                 "Resisted": "Resisted", "Slipped": "Slipped", "Relapsed": "Relapsed", REST_STATUS: "Rest"}
-TITLE_W, TODAY_W, DAY_W, ACTIONS_W = 250, 295, 92, 150
+TITLE_W, TODAY_W, DAY_W, ACTIONS_W = 250, 325, 92, 150
 REST_COLOR = "#6b6a66"  # neutral: answered, but not a score
 SETTING_REMINDER = "checkin_reminder_time"   # "HH:MM" or "" (off)
 SETTING_REMINDED = "checkin_reminded_on"     # ISO date of the last reminder
@@ -119,6 +118,33 @@ class ScheduleView(ft.Column):
         # highlight "today" only when the displayed week is the current one
         self.today_idx = real_today if self.viewing_current else -1
 
+    def _day_date(self, day_idx: int) -> date:
+        return date.fromisocalendar(self.year, self.week, day_idx + 1)
+
+    @staticmethod
+    def notes_on() -> bool:
+        """Habit notes belong to the Diary: they're offered only while the Diary tab is on."""
+        return settings.tab_enabled("diary")
+
+    def open_note(self, act, day_idx: int):
+        """Writes / edits the diary note of a habit on a day (N key or the ✎ button)."""
+        if not self.notes_on() or day_idx > self._last_editable_day():
+            return
+        from diary_view import open_habit_note
+        act_id, name = act[0], act[1]
+        status = self._logs.get((act_id, day_idx), ("-", None))[0]
+        self.modal = True
+
+        def closed():
+            self.modal = False
+
+        open_habit_note(self.app_page, act_id, name, self._day_date(day_idx), status,
+                        on_saved=self.render, on_close=closed)
+
+    def _note_mark(self, act_id: int, day_idx: int) -> str:
+        flag = getattr(self, "_notes", {}).get((act_id, self._day_date(day_idx).isoformat()))
+        return "" if flag is None else ("⭐" if flag else "✎")
+
     def _last_editable_day(self) -> int:
         return self.today_idx if self.viewing_current else 6
 
@@ -201,7 +227,8 @@ class ScheduleView(ft.Column):
     # ------------------------------------------------------------ keyboard (wired in main.py)
     def handle_key(self, e) -> bool:
         """1-4 answer the highlighted cell (and jump to the next open habit), R rests it (positive
-        habits, up to 3 per week), 0/Backspace clear, arrows move. Returns True when the key was used."""
+        habits, up to 3 per week), N writes a diary note, 0/Backspace clear, arrows move.
+        Returns True when the key was used."""
         if not self.visible or self.typing or self.modal or not getattr(self, "_activities", None):
             return False
         if e.ctrl or e.alt or e.meta:
@@ -229,6 +256,11 @@ class ScheduleView(ft.Column):
             self.set_status(act_id, day, is_neg, REST_STATUS)
             self._logs = db.get_current_week_logs(self.year, self.week)
             row = self._next_row(row, day)
+        elif key in ("N", "n"):
+            if self.notes_on():
+                self.cursor = (row, day)
+                self.open_note(acts[row], day)
+            return True
         elif key in ("0", "Backspace", "Delete"):
             act_id, _, _, is_neg = acts[row]
             self.set_status(act_id, day, is_neg, "-")
@@ -327,6 +359,7 @@ class ScheduleView(ft.Column):
         self._sync_week()
         self._logs = db.get_current_week_logs(self.year, self.week)
         self._activities = db.get_activities()
+        self._notes = db.habit_note_flags(self._day_date(0), self._day_date(6)) if self.notes_on() else {}
         if self._activities:
             if self.cursor is None or self.cursor[0] >= len(self._activities) or \
                     self.cursor[1] > self._last_editable_day():
@@ -382,7 +415,7 @@ class ScheduleView(ft.Column):
                 ft.Button(content="This week", icon=ft.Icons.TODAY, disabled=self.viewing_current,
                           on_click=lambda e: self._go_current_week()),
                 ft.Container(expand=True),
-                ft.Text("Keys: 1-4 mark • R rest • 0 clear • arrows move", size=11, color=ft.Colors.GREY_500),
+                ft.Text("Keys: 1-4 mark • R rest • N note • 0 clear • arrows move", size=11, color=ft.Colors.GREY_500),
                 ft.IconButton(ft.Icons.NOTIFICATIONS_ACTIVE if rem else ft.Icons.NOTIFICATIONS_OFF_OUTLINED,
                               icon_color=ft.Colors.AMBER_ACCENT if rem else ft.Colors.GREY_500,
                               tooltip=f"Check-in reminder at {rem}" if rem else "Check-in reminder off",
@@ -481,14 +514,26 @@ class ScheduleView(ft.Column):
                 border_radius=6, padding=ft.Padding.symmetric(horizontal=6, vertical=5), width=34,
                 alignment=ft.Alignment.CENTER, ink=allowed, tooltip=tip,
                 on_click=(lambda e: self._click_today(row, act, REST_STATUS, current)) if allowed else None))
+        if self.notes_on():
+            mark = self._note_mark(act[0], self.today_idx)
+            buttons.append(ft.Container(
+                content=ft.Text(mark, size=13) if mark else ft.Icon(ft.Icons.EDIT_NOTE, size=16,
+                                                                    color=ft.Colors.GREY_500),
+                border=ft.Border.all(1, ft.Colors.PINK_ACCENT_100 if mark else ft.Colors.GREY_700),
+                border_radius=6, padding=ft.Padding.symmetric(horizontal=4, vertical=5), width=30,
+                alignment=ft.Alignment.CENTER, ink=True,
+                tooltip="Edit your diary note • key N" if mark else "Write a diary note about it • key N",
+                on_click=lambda e: self.open_note(act, self.today_idx)))
         return ft.Row(buttons, spacing=3)
 
     def _past_cell(self, row, act, d, status, score):
         """A coloured square; one click opens a short menu to set/correct it."""
         is_rest = status == REST_STATUS
         has_answer = score is not None or is_rest
+        mark = self._note_mark(act[0], d) if self.notes_on() else ""
         chip = ft.Container(
-            content=ft.Text(SHORT_LABELS.get(status, status) if has_answer else "—", size=11,
+            content=ft.Text((SHORT_LABELS.get(status, status) if has_answer else "—") + (f" {mark}" if mark else ""),
+                            size=11,
                             weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE if has_answer else ft.Colors.GREY_500),
             width=DAY_W - 8, height=30, border_radius=6, alignment=ft.Alignment.CENTER,
             bgcolor=REST_COLOR if is_rest else (score_color(score) if has_answer else
@@ -501,7 +546,11 @@ class ScheduleView(ft.Column):
             items.append(ft.PopupMenuItem(content=ft.Text("Rest  (no score)"), checked=is_rest,
                                           on_click=lambda e: self._pick_past(row, act, d, REST_STATUS)))
         items.append(ft.PopupMenuItem(content=ft.Text("Clear"), on_click=lambda e: self._pick_past(row, act, d, "-")))
-        label = "rest day" if is_rest else (status if has_answer else "not marked")
+        if self.notes_on():
+            items.append(ft.PopupMenuItem(content=ft.Text("Edit diary note…" if mark else "Write a diary note…"),
+                                          icon=ft.Icons.EDIT_NOTE, on_click=lambda e: self.open_note(act, d)))
+        label = ("rest day" if is_rest else (status if has_answer else "not marked")) + \
+            (" • has a diary note" if mark else "")
         return ft.PopupMenuButton(content=chip, items=items, tooltip=f"{DAY_NAMES[d]}: {label}")
 
     def _add_row(self):

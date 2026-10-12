@@ -105,6 +105,9 @@ class GraphsView(ft.Column):
             self.controls.append(self._heatmap_card(key, today))
             self.controls.append(ft.Row([self._ranking_card(key, today), self._weekday_card(key, today)],
                                         spacing=14, vertical_alignment=ft.CrossAxisAlignment.START))
+        mood = self._mood_card(key, today)
+        if mood:
+            self.controls.append(mood)
         self.controls.append(self._year_card(today))
         weeks = an.weekly_series(key, today)
         self.controls.append(self._xp_card(weeks))
@@ -236,6 +239,43 @@ class GraphsView(ft.Column):
         sub = (f"Average per {unit} • latest {latest:.1f} • period average {sum(values) / len(values):.1f} • "
                f"dashed line = goal {target:g}")
         return card("Daily score trend", sub, ft.Container(content=chart, height=230))
+
+    # ------------------------------------------------------------ mood (from the Diary)
+    def _mood_card(self, key, today):
+        """Mood line (1-5, one series) + mood on passing vs other days as two numbers (never a 2nd axis)."""
+        import settings
+        if not settings.tab_enabled("diary"):
+            return None
+        series = an.mood_series(key, today)
+        values = [v for _, _, v in series if v is not None]
+        if not values:
+            return None
+        n = len(series)
+        points = [fch.LineChartDataPoint(i, round(v, 2), tooltip=f"{label}: mood {v:.1f}")
+                  for i, (label, _, v) in enumerate(series) if v is not None]
+        line = fch.LineChartData(points=points, color=SERIES_1, stroke_width=2, curved=False,
+                                 rounded_stroke_cap=True, point=True)
+        step = max(1, math.ceil(n / 8))
+        labels = [fch.ChartAxisLabel(value=i, label=ft.Text(series[i][0], size=10, color=MUTED))
+                  for i in range(0, n, step)]
+        faces = {1: "1 😞", 2: "2", 3: "3 😐", 4: "4", 5: "5 😄"}
+        chart = fch.LineChart(
+            data_series=[line], min_y=1, max_y=5, min_x=0, max_x=max(1, n - 1),
+            left_axis=fch.ChartAxis(labels=axis_labels(range(1, 6), lambda v: faces[v]), label_size=40),
+            bottom_axis=fch.ChartAxis(labels=labels, label_size=24),
+            horizontal_grid_lines=fch.ChartGridLines(interval=1, color=GRID, width=1),
+            interactive=True, expand=True)
+        good, other = an.mood_vs_habits(key, today)
+        goal = db.passing_score()
+        tiles = ft.Row([
+            self._tile(f"Mood on days ≥ {goal:g}", f"{good[0]:.1f}" if good else "—",
+                       f"{good[1]} day{'s' if good and good[1] != 1 else ''}" if good else "no such days yet"),
+            self._tile("Mood on other days", f"{other[0]:.1f}" if other else "—",
+                       f"{other[1]} day{'s' if other and other[1] != 1 else ''}" if other else "no such days yet"),
+        ], spacing=14)
+        unit = "week" if an.uses_weeks(key) else "day"
+        sub = f"From the Diary • average per {unit} • {len(values)} {unit}{'s' if len(values) != 1 else ''} with a mood"
+        return card("Mood", sub, ft.Column([ft.Container(content=chart, height=200), tiles], spacing=12))
 
     # ------------------------------------------------------------ habit heatmap
     def _heatmap_card(self, key, today):

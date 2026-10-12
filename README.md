@@ -73,21 +73,28 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Backgrounds:** pure black, the project image, or **a new image each day from a folder** you choose — images fill the screen without being stretched.
 * **Live preview** in the tab before applying, and **Pause & restore**: your original wallpaper is kept on the first apply and comes back whenever you pause the HUD.
 
-### 🤖 6. Telegram Assistant (optional)
-* **A real assistant in your pocket:** chat by **text or voice message** — "how's my day?", "mark gym as ok", "rest day for stretching today", "add dentist friday 2:30pm", "I studied docker 40 minutes: volumes", "what expires this month?". Gemini reads your real data and acts through safe tools.
+### 📔 6. Diary
+* **A page per day** with **mood** and **energy** (1–5) — write what happened, what's on your mind, anything.
+* **Habit notes from the Schedule:** "Excellent" doesn't feel like enough? Press ✎ on a habit (or **N**) and write why it mattered; mark it ⭐ to keep it in your **Highlights**. Notes show up on that day's page.
+* **Guided exercises** for your mental health: *Win of the day*, *Three good things*, *Expressive writing*, *Thought record*, *Worry dump* and *Self-compassion letter* — each worth **+2 XP** (once per kind per day, up to 3 a day; free writing never asks anything of you).
+* **Look back:** a month calendar with your moods, **search**, **on this day** (a week, a month and a year ago), Highlights, and a **Mood** card in Graphs (mood on days you hit the passing score vs other days).
+* **Private by design:** everything written is **encrypted**, an optional **PIN** locks the tab, and nothing leaves your computer — except an optional **gentle reflection by Gemini**, sent only when you click (with a one-time notice). The Telegram assistant can *add* to today's page ("write in my diary: …") but can never read it.
+
+### 🤖 7. Telegram Assistant (optional)
+* **A real assistant in your pocket:** chat by **text or voice message** — "how's my day?", "mark gym as ok", "rest day for stretching today", "add dentist friday 2:30pm", "I studied docker 40 minutes: volumes", "what expires this month?", "write in my diary: best stretching ever". Gemini reads your real data and acts through safe tools.
 * **It never deletes anything** (there is no tool for it), never sees document numbers, and only talks to **your** chat, paired with a one-time code.
 * **Replies in text, voice or both**, with a **female or male** neural voice (Brazilian Portuguese or English, via `edge-tts`).
 * **Messages it sends you:** a **morning briefing** (your wake-up message: events, reviews, documents, next quest step), **calendar reminders** at each event's own reminder time, **documents expiring**, **study reviews due**, an **evening check-in with answer buttons** (tap to mark each habit) and **achievements** (level up, streak milestones, quests completed, chapters mastered).
 * **Quiet hours** hold back non-urgent messages; nothing is ever sent twice, even after a restart.
 * Uses long polling (no server, no open port). It works while the app is running (it lives in the tray).
 
-### ⚙️ 7. Options
+### ⚙️ 8. Options
 * **AI & messages language** (Português / English), **start with Windows**, close-to-tray, auto-update on/off.
-* **Turn tabs off:** Graphs, Quests, Study, Wallpaper, Calendar and Documents can be disabled — a disabled tab is **not loaded at all** and its background work stops (restart button included).
+* **Turn tabs off:** Graphs, Quests, Study, Diary, Wallpaper, Calendar and Documents can be disabled — a disabled tab is **not loaded at all** and its background work stops (restart button included).
 * **Scoring rules:** the passing score (streak / green day) and rest days per habit per week.
 * **Quiet hours**, extra **backup folder**, open the data folder, CSV export, Gemini settings and the whole Telegram setup.
 
-### ⚡ 8. Quality of Life & Storage
+### ⚡ 9. Quality of Life & Storage
 * **⚡ Quick-Fill Today:** Automatically marks all unlogged tasks for today (`Ok` for positive habits, `Resisted` for bad habits) in one click.
 * **💾 One-Click CSV Export:** Generates a timestamped CSV on your Desktop.
 * **🔒 AppData Persistence:** Stores SQLite data in `%APPDATA%\Daily_Personal_Gamification`, so updates never erase your data.
@@ -112,6 +119,7 @@ Daily_Personal_Gamification/
 ├── analytics.py        # Read-only analytics behind the Graphs tab
 ├── todo_view.py        # Quest log: steps, quest log, targets, repeats, Hall of Fame, AI planner
 ├── study_view.py       # Study chapters: journal, wrap-up, reviews, AI settings
+├── diary_view.py       # Diary: daily page, mood, exercises, habit notes, look back, PIN lock
 ├── calendar_view.py    # Calendar and events
 ├── documents_view.py   # Document expiration tracker, renewals, PIN lock
 ├── wallpaper.py        # Wallpaper HUD: modular blocks, scaling, backgrounds, pause/restore
@@ -128,6 +136,7 @@ Daily_Personal_Gamification/
 ├── ai_review.py        # AI deep reviews: review packs and answer grading
 ├── ai_quest.py         # AI quest planner (no dates or deadlines)
 ├── ai_insight.py       # Insight of the day for the wallpaper (one Gemini call per day)
+├── ai_diary.py         # Opt-in gentle reflection on a diary day
 ├── ai_weekly.py        # Weekly summary for the Graphs tab (one Gemini call per week)
 ├── ui_helpers.py       # Shared confirmation dialog
 ├── tests/              # Database, AI and assistant tests (unittest, no network)

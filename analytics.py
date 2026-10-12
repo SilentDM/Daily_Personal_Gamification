@@ -2,7 +2,7 @@
 from datetime import date, timedelta
 
 import database as db
-from constants import SCORE_PASSING, DAY_NAMES, REST_STATUS
+from constants import DAY_NAMES, REST_STATUS
 
 # key -> (label, number of days)
 PERIODS = {
@@ -40,7 +40,7 @@ def habit_logs(start: date, end: date):
     """[(activity_id, name, is_negative, date, status, score)] for active habits with a score."""
     years = sorted({start.isocalendar()[0], end.isocalendar()[0], start.year, end.year})
     conn = db.get_connection()
-    rows = conn.execute(f"""
+    rows = conn.execute("""
         SELECT l.activity_id, a.name, a.is_negative, l.year, l.week_number, l.day_of_week, l.status, l.score
         FROM daily_logs l JOIN activities a ON a.id = l.activity_id
         WHERE a.active = 1 AND l.score IS NOT NULL AND l.year BETWEEN ? AND ?
@@ -105,6 +105,34 @@ def score_series(key: str, today: date = None):
         series.append((f"{wk:%d/%m}", wk, sum(vals) / len(vals) if vals else None))
         wk += timedelta(days=7)
     return series
+
+
+def mood_series(key: str, today: date = None):
+    """[(label, date, mood 1-5 or None)] from the Diary — daily, or weekly averages for long periods."""
+    start, end, _, _ = period_bounds(key, today)
+    moods = db.diary_moods(start, end)
+    if not uses_weeks(key):
+        return [(f"{d:%d/%m}", d, moods.get(d)) for d in _days(start, end)]
+    series = []
+    wk = monday(start)
+    while wk <= end:
+        vals = [v for d, v in moods.items() if wk <= d <= wk + timedelta(days=6)]
+        series.append((f"{wk:%d/%m}", wk, sum(vals) / len(vals) if vals else None))
+        wk += timedelta(days=7)
+    return series
+
+
+def mood_vs_habits(key: str, today: date = None):
+    """Average mood on days that reached the passing score vs the other answered days:
+    ((avg, n_days) or None, (avg, n_days) or None)."""
+    start, end, _, _ = period_bounds(key, today)
+    moods = db.diary_moods(start, end)
+    scores = daily_scores(start, end)
+    goal = db.passing_score()
+    good = [m for d, m in moods.items() if d in scores and scores[d] >= goal]
+    other = [m for d, m in moods.items() if d in scores and scores[d] < goal]
+    return ((sum(good) / len(good), len(good)) if good else None,
+            (sum(other) / len(other), len(other)) if other else None)
 
 
 def habit_matrix(key: str, today: date = None):

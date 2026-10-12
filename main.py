@@ -72,6 +72,7 @@ from wallpaper_view import WallpaperView
 from calendar_view import CalendarView
 from documents_view import DocumentsView
 from options_view import OptionsView
+from diary_view import DiaryView
 
 APP_TITLE = "Personal Gamification Tracker"
 log = setup_logging()
@@ -131,6 +132,11 @@ def main(page: ft.Page):
         global tray_icon_instance
         assistant.stop()
         try:
+            if diary_view:
+                diary_view.save_draft()  # quitting never loses what was typed in the diary
+        except Exception:  # also NameError when quitting before the views exist
+            pass
+        try:
             flush_wallpaper_update()  # do not lose a pending wallpaper refresh
         except Exception:
             pass
@@ -188,6 +194,7 @@ def main(page: ft.Page):
     graphs_view = GraphsView(page) if "graphs" in enabled else None
     todo_view = TodoView(page) if "quests" in enabled else None
     study_view = StudyView(page) if "study" in enabled else None
+    diary_view = DiaryView(page) if "diary" in enabled else None
     wallpaper_view = WallpaperView(page) if "wallpaper" in enabled else None
     calendar_view = CalendarView(page) if "calendar" in enabled else None
     documents_view = DocumentsView(page) if "documents" in enabled else None
@@ -200,6 +207,7 @@ def main(page: ft.Page):
         (graphs_view, lambda: graphs_view.refresh(), icons.BAR_CHART_OUTLINED, icons.BAR_CHART, "Graphs"),
         (todo_view, lambda: todo_view.render(), icons.CHECKLIST_OUTLINED, icons.CHECKLIST, "Quests"),
         (study_view, lambda: study_view.refresh_list(), icons.SCHOOL_OUTLINED, icons.SCHOOL, "Study"),
+        (diary_view, lambda: diary_view.render(), icons.MENU_BOOK_OUTLINED, icons.MENU_BOOK, "Diary"),
         (wallpaper_view, lambda: wallpaper_view.render(), icons.WALLPAPER_OUTLINED, icons.WALLPAPER, "Wallpaper"),
         (calendar_view, lambda: calendar_view.render(),
          icons.CALENDAR_MONTH_OUTLINED, icons.CALENDAR_MONTH, "Calendar"),
@@ -212,6 +220,8 @@ def main(page: ft.Page):
         show_tab(e.control.selected_index)
 
     def show_tab(idx: int):
+        if diary_view and diary_view.visible:
+            diary_view.save_draft()  # leaving the diary never loses what was typed
         rail.selected_index = idx
         for i, tab in enumerate(tabs):
             tab[0].visible = (i == idx)

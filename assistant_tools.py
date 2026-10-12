@@ -366,7 +366,24 @@ def create_quest(title: str, steps: str = "", difficulty: str = "Normal") -> dic
     return _once(("create_quest", title.lower()), run)
 
 
+def write_diary(text: str) -> dict:
+    """Adds a paragraph to TODAY's private diary page. Write-only: you can never read the diary back.
+    Use only when the user explicitly asks to write or note something in the diary. Write their words
+    faithfully, in first person and in their language (fix only obvious transcription slips; never summarize,
+    add or interpret)."""
+    def run():
+        import settings
+        if not settings.tab_enabled("diary"):
+            return _err("The Diary tab is turned off in Options.")
+        try:
+            db.append_diary(date.today(), text, source="Telegram")
+        except ValueError as exc:
+            return _err(exc)
+        return {"ok": True, "saved_to": f"diary page of {date.today().isoformat()}", "characters": len(text)}
+    return _once(("diary", (text or "")[:60]), run)
+
+
 READ_TOOLS = [get_today_overview, get_agenda, get_habits, get_quests, get_study, get_progress, get_documents]
 ACTION_TOOLS = [mark_habit, add_calendar_event, mark_event_done, log_study_session, check_quest_step,
-                add_quest_log, complete_quest, create_quest]
+                add_quest_log, complete_quest, create_quest, write_diary]
 ALL_TOOLS = READ_TOOLS + ACTION_TOOLS

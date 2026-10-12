@@ -6,7 +6,8 @@ from datetime import datetime, date, timedelta
 from constants import (get_rank_title, XP_QUEST, XP_STUDY, XP_EVENT, SCORE_PASSING, REST_STATUS,
                        REST_LIMIT_PER_WEEK,
                        XP_STUDY_LOG, XP_REVIEW, STUDY_STAGES, REVIEW_DAYS,
-                       XP_SUBQUEST, XP_QUEST_LOG, QUEST_DIFFICULTY_XP)
+                       XP_SUBQUEST, XP_QUEST_LOG, QUEST_DIFFICULTY_XP, XP_DIARY_EXERCISE,
+                       DIARY_EXERCISE_MIN_CHARS, DIARY_XP_EXERCISES_PER_DAY)
 
 def get_db_path():
     app_data = os.getenv("APPDATA")
@@ -177,6 +178,7 @@ def init_db():
     _run_quest_migrations(conn)
     _run_document_migrations(conn)
     _run_assistant_migrations(conn)
+    _run_diary_migrations(conn)
 
     conn.commit()
     conn.close()
@@ -1884,6 +1886,44 @@ def reset_doc_pin_and_wipe_secrets():
     remove_doc_pin()
 
 
+# --- Diary PIN: same scheme, its own setting (a privacy screen; entries are encrypted by secure.py) ---
+SETTING_DIARY_PIN = "diary_pin_hash"
+
+
+def has_diary_pin() -> bool:
+    return bool(get_hud_settings().get(SETTING_DIARY_PIN))
+
+
+def set_diary_pin(pin: str):
+    salt = os.urandom(16)
+    set_hud_setting(SETTING_DIARY_PIN, f"{salt.hex()}${_hash_pin(pin, salt)}")
+
+
+def check_diary_pin(pin: str) -> bool:
+    import hmac
+    stored = get_hud_settings().get(SETTING_DIARY_PIN) or ""
+    if "$" not in stored:
+        return not stored
+    salt_hex, digest = stored.split("$", 1)
+    return hmac.compare_digest(_hash_pin(pin or "", bytes.fromhex(salt_hex)), digest)
+
+
+def remove_diary_pin():
+    set_hud_setting(SETTING_DIARY_PIN, "")
+
+
+def reset_diary_pin_and_wipe_text():
+    """Forgotten PIN: removes the PIN *and* every written text of the diary (pages, exercises, habit notes,
+    reflections). Moods and energy levels stay. Earned XP stays too (history is immutable)."""
+    conn = get_connection()
+    conn.execute("UPDATE diary_entries SET body = '', reflection = '', reflection_at = ''")
+    conn.execute("DELETE FROM diary_exercises")
+    conn.execute("DELETE FROM habit_notes")
+    conn.commit()
+    conn.close()
+    remove_diary_pin()
+
+
 # --- Old-format documents (personal_documents): import the safe fields, then delete for good ---
 _LEGACY_CATEGORY = {"Identity": "Identity", "Vehicles": "Vehicle", "Housing & Finance": "Home", "Other": "Other"}
 
@@ -2275,6 +2315,311 @@ def _run_assistant_migrations(conn):
             sent_at TEXT NOT NULL
         )
     """)
+
+
+def _run_diary_migrations(conn):
+    """Diary: one page per day, guided exercises and notes on Schedule cells. Text is encrypted (secure.py)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS diary_entries (
+            entry_date TEXT PRIMARY KEY,
+            body TEXT NOT NULL DEFAULT '',
+            mood INTEGER,
+            energy INTEGER,
+            reflection TEXT NOT NULL DEFAULT '',
+            reflection_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS diary_exercises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_date TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_diary_ex_date ON diary_exercises(entry_date)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS habit_notes (
+            activity_id INTEGER NOT NULL,
+            note_date TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            highlight INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (activity_id, note_date)
+        )
+    """)
+
+
+# ==========================================================================
+# Diary (text is encrypted with the same key as the documents vault)
+# ==========================================================================
+DIARY_FIELDS = ("entry_date", "body", "mood", "energy", "reflection", "reflection_at", "updated_at")
+
+
+def _iso(day) -> str:
+    return day.isoformat() if isinstance(day, date) else str(day)
+
+
+def get_diary_entry(day) -> dict:
+    """The page of a day (decrypted); an empty page when nothing was written yet."""
+    conn = get_connection()
+    row = conn.execute(f"SELECT {', '.join(DIARY_FIELDS)} FROM diary_entries WHERE entry_date = ?",
+                       (_iso(day),)).fetchone()
+    conn.close()
+    if not row:
+        return {"entry_date": _iso(day), "body": "", "mood": None, "energy": None, "reflection": "",
+                "reflection_at": "", "updated_at": ""}
+    entry = dict(zip(DIARY_FIELDS, row))
+    entry["body"] = secure.decrypt(entry["body"]) or ""
+    entry["reflection"] = secure.decrypt(entry["reflection"]) or ""
+    return entry
+
+
+_UNSET = object()
+
+
+def save_diary_entry(day, body=_UNSET, mood=_UNSET, energy=_UNSET):
+    """Saves only the given parts of a day's page (body is encrypted; mood/energy 1-5 or None)."""
+    fields = {}
+    if body is not _UNSET:
+        fields["body"] = secure.encrypt((body or "").rstrip()) or ""
+    for key, value in (("mood", mood), ("energy", energy)):
+        if value is not _UNSET:
+            fields[key] = None if value in (None, "") else max(1, min(5, int(value)))
+    if not fields:
+        return
+    fields["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO diary_entries (entry_date) VALUES (?)", (_iso(day),))
+    conn.execute(f"UPDATE diary_entries SET {', '.join(k + ' = ?' for k in fields)} WHERE entry_date = ?",
+                 (*fields.values(), _iso(day)))
+    conn.commit()
+    conn.close()
+
+
+def append_diary(day, text: str, source: str = "") -> str:
+    """Adds a timestamped paragraph to a day's page (used by the Telegram assistant). Returns the new body."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Nothing to write.")
+    stamp = datetime.now().strftime("%H:%M") + (f" · {source}" if source else "")
+    body = get_diary_entry(day)["body"]
+    body = (body + "\n\n" if body else "") + f"[{stamp}] {text}"
+    save_diary_entry(day, body=body)
+    return body
+
+
+def set_diary_reflection(day, text: str):
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO diary_entries (entry_date) VALUES (?)", (_iso(day),))
+    conn.execute("UPDATE diary_entries SET reflection = ?, reflection_at = ? WHERE entry_date = ?",
+                 (secure.encrypt(text or "") or "", datetime.now().isoformat(timespec="seconds") if text else "",
+                  _iso(day)))
+    conn.commit()
+    conn.close()
+
+
+def get_diary_exercises(day) -> list:
+    """[{id, entry_date, kind, fields: {name: text}, created_at}] of a day, oldest first."""
+    conn = get_connection()
+    rows = conn.execute("SELECT id, entry_date, kind, content, created_at FROM diary_exercises "
+                        "WHERE entry_date = ? ORDER BY id", (_iso(day),)).fetchall()
+    conn.close()
+    out = []
+    for i, d, kind, content, created in rows:
+        try:
+            fields = json.loads(secure.decrypt(content) or "{}")
+        except ValueError:
+            fields = {}
+        out.append({"id": i, "entry_date": d, "kind": kind, "fields": fields, "created_at": created})
+    return out
+
+
+def exercise_text_length(fields: dict) -> int:
+    return sum(len((v or "").strip()) for v in fields.values())
+
+
+def add_diary_exercise(day, kind: str, fields: dict) -> float:
+    """Saves a guided exercise (encrypted). XP: XP_DIARY_EXERCISE for each *kind* finished on a day,
+    for up to DIARY_XP_EXERCISES_PER_DAY kinds, only when it has some real writing. Returns the XP earned."""
+    fields = {k: (v or "").strip() for k, v in fields.items()}
+    if not any(fields.values()):
+        raise ValueError("The exercise is empty.")
+    iso = _iso(day)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO diary_exercises (entry_date, kind, content, created_at) VALUES (?, ?, ?, ?)",
+                   (iso, kind, secure.encrypt(json.dumps(fields, ensure_ascii=False)),
+                    datetime.now().isoformat(timespec="seconds")))
+    xp = 0.0
+    if exercise_text_length(fields) >= DIARY_EXERCISE_MIN_CHARS:
+        ref = f"{iso}:{kind}"
+        rewarded = cursor.execute("SELECT COUNT(*) FROM xp_ledger WHERE source = 'diary_exercise' "
+                                  "AND ref_key LIKE ?", (f"{iso}:%",)).fetchone()[0]
+        already = cursor.execute("SELECT 1 FROM xp_ledger WHERE source = 'diary_exercise' AND ref_key = ?",
+                                 (ref,)).fetchone()
+        if not already and rewarded < DIARY_XP_EXERCISES_PER_DAY:
+            _ledger_set(cursor, "diary_exercise", ref, iso, XP_DIARY_EXERCISE, replace=False)
+            xp = XP_DIARY_EXERCISE
+    conn.commit()
+    conn.close()
+    return xp
+
+
+def update_diary_exercise(exercise_id: int, fields: dict):
+    conn = get_connection()
+    conn.execute("UPDATE diary_exercises SET content = ? WHERE id = ?",
+                 (secure.encrypt(json.dumps({k: (v or "").strip() for k, v in fields.items()},
+                                            ensure_ascii=False)), exercise_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_diary_exercise(exercise_id: int):
+    """Deletes one of your exercises; its XP goes away when no exercise of that kind is left that day."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT entry_date, kind FROM diary_exercises WHERE id = ?", (exercise_id,)).fetchone()
+    if row:
+        cursor.execute("DELETE FROM diary_exercises WHERE id = ?", (exercise_id,))
+        left = cursor.execute("SELECT 1 FROM diary_exercises WHERE entry_date = ? AND kind = ?", row).fetchone()
+        if not left:
+            _ledger_clear(cursor, "diary_exercise", f"{row[0]}:{row[1]}")
+    conn.commit()
+    conn.close()
+
+
+# --- notes on Schedule cells ("why this Excellent felt special") ---
+def get_habit_note(activity_id: int, day) -> dict:
+    conn = get_connection()
+    row = conn.execute("SELECT note, highlight FROM habit_notes WHERE activity_id = ? AND note_date = ?",
+                       (activity_id, _iso(day))).fetchone()
+    conn.close()
+    return {"note": secure.decrypt(row[0]) or "", "highlight": bool(row[1])} if row else \
+        {"note": "", "highlight": False}
+
+
+def set_habit_note(activity_id: int, day, note: str, highlight: bool = False):
+    """Saves (encrypted) or, with an empty note, removes the note of a habit on a day."""
+    note = (note or "").strip()
+    conn = get_connection()
+    if note:
+        conn.execute("""
+            INSERT INTO habit_notes (activity_id, note_date, note, highlight, updated_at) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(activity_id, note_date) DO UPDATE SET
+                note = excluded.note, highlight = excluded.highlight, updated_at = excluded.updated_at
+        """, (activity_id, _iso(day), secure.encrypt(note), int(bool(highlight)),
+              datetime.now().isoformat(timespec="seconds")))
+    else:
+        conn.execute("DELETE FROM habit_notes WHERE activity_id = ? AND note_date = ?", (activity_id, _iso(day)))
+    conn.commit()
+    conn.close()
+
+
+def habit_note_flags(start, end) -> dict:
+    """{(activity_id, 'YYYY-MM-DD'): highlight} for the Schedule grid (no text: it stays locked)."""
+    conn = get_connection()
+    rows = conn.execute("SELECT activity_id, note_date, highlight FROM habit_notes WHERE note_date BETWEEN ? AND ?",
+                        (_iso(start), _iso(end))).fetchall()
+    conn.close()
+    return {(a, d): bool(h) for a, d, h in rows}
+
+
+def get_habit_notes(day=None, highlights_only: bool = False, limit: int = None) -> list:
+    """[{activity_id, habit, date, note, highlight, status}] decrypted, newest first (one day or all)."""
+    query = """
+        SELECT n.activity_id, a.name, n.note_date, n.note, n.highlight
+        FROM habit_notes n JOIN activities a ON a.id = n.activity_id
+    """
+    where, params = [], []
+    if day is not None:
+        where.append("n.note_date = ?")
+        params.append(_iso(day))
+    if highlights_only:
+        where.append("n.highlight = 1")
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY n.note_date DESC, a.sort_order, a.id"
+    if limit:
+        query += f" LIMIT {int(limit)}"
+    conn = get_connection()
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    out = []
+    for aid, name, d, note, hl in rows:
+        dd = date.fromisoformat(d)
+        iso = dd.isocalendar()
+        status = get_current_week_logs(iso[0], iso[1]).get((aid, iso[2] - 1), ("-", None))[0]
+        out.append({"activity_id": aid, "habit": name, "date": d, "note": secure.decrypt(note) or "",
+                    "highlight": bool(hl), "status": status})
+    return out
+
+
+def diary_month(start, end) -> dict:
+    """{'YYYY-MM-DD': {mood, energy, written, exercises, notes, highlight}} for the diary calendar."""
+    s, e = _iso(start), _iso(end)
+    conn = get_connection()
+    days = {}
+    for d, body, mood, energy in conn.execute(
+            "SELECT entry_date, body, mood, energy FROM diary_entries WHERE entry_date BETWEEN ? AND ?", (s, e)):
+        days[d] = {"mood": mood, "energy": energy, "written": bool(body), "exercises": 0, "notes": 0,
+                   "highlight": False}
+    blank = {"mood": None, "energy": None, "written": False, "exercises": 0, "notes": 0, "highlight": False}
+    for d, n in conn.execute("SELECT entry_date, COUNT(*) FROM diary_exercises WHERE entry_date BETWEEN ? AND ? "
+                             "GROUP BY entry_date", (s, e)):
+        days.setdefault(d, dict(blank))["exercises"] = n
+    for d, n, hl in conn.execute("SELECT note_date, COUNT(*), MAX(highlight) FROM habit_notes "
+                                 "WHERE note_date BETWEEN ? AND ? GROUP BY note_date", (s, e)):
+        info = days.setdefault(d, dict(blank))
+        info["notes"], info["highlight"] = n, bool(hl)
+    conn.close()
+    return days
+
+
+def diary_moods(start, end) -> dict:
+    """{date: mood} for the Graphs tab (moods are numbers, never encrypted)."""
+    conn = get_connection()
+    rows = conn.execute("SELECT entry_date, mood FROM diary_entries WHERE mood IS NOT NULL AND entry_date "
+                        "BETWEEN ? AND ?", (_iso(start), _iso(end))).fetchall()
+    conn.close()
+    return {date.fromisoformat(d): m for d, m in rows}
+
+
+def search_diary(query: str, limit: int = 50) -> list:
+    """Case-insensitive search in pages, exercises and habit notes (decrypted in memory).
+    [{date, where, snippet}] newest first."""
+    q = (query or "").strip().lower()
+    if len(q) < 2:
+        return []
+
+    def snippet(text):
+        i = text.lower().find(q)
+        start = max(0, i - 40)
+        return ("…" if start else "") + text[start:i + len(q) + 60].replace("\n", " ") + "…"
+
+    conn = get_connection()
+    pages = conn.execute("SELECT entry_date, body FROM diary_entries WHERE body != ''").fetchall()
+    exercises = conn.execute("SELECT entry_date, kind, content FROM diary_exercises").fetchall()
+    conn.close()
+    hits = []
+    for d, body in pages:
+        text = secure.decrypt(body) or ""
+        if q in text.lower():
+            hits.append({"date": d, "where": "page", "snippet": snippet(text)})
+    for d, kind, content in exercises:
+        try:
+            text = "\n".join(json.loads(secure.decrypt(content) or "{}").values())
+        except ValueError:
+            continue
+        if q in text.lower():
+            hits.append({"date": d, "where": kind, "snippet": snippet(text)})
+    for n in get_habit_notes():
+        if q in n["note"].lower():
+            hits.append({"date": n["date"], "where": n["habit"], "snippet": snippet(n["note"])})
+    hits.sort(key=lambda h: h["date"], reverse=True)
+    return hits[:limit]
 
 
 def was_sent(key: str) -> bool:
