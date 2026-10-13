@@ -78,7 +78,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * **Habit notes from the Schedule:** "Excellent" doesn't feel like enough? Press ✎ on a habit (or **N**) and write why it mattered; mark it ⭐ to keep it in your **Highlights**. Notes show up on that day's page.
 * **Guided exercises** for your mental health: *Win of the day*, *Three good things*, *Expressive writing*, *Thought record*, *Worry dump* and *Self-compassion letter* — each worth **+2 XP** (once per kind per day, up to 3 a day; free writing never asks anything of you).
 * **Look back:** a month calendar with your moods, **search**, **on this day** (a week, a month and a year ago), Highlights, and a **Mood** card in Graphs (mood on days you hit the passing score vs other days).
-* **Private by design:** everything written is **encrypted**, an optional **PIN** locks the tab, and nothing leaves your computer — except an optional **gentle reflection by Gemini**, sent only when you click (with a one-time notice). The Telegram assistant can *add* to today's page ("write in my diary: …") but can never read it.
+* **Private by design:** everything written is **encrypted**, an optional **PIN** locks the tab, and nothing leaves your computer — except an optional **honest, impartial reflection by Gemini**, sent only when you click (with a one-time notice). The Telegram assistant can *add* to today's page ("write in my diary: …") but can never read it.
 
 ### 🤖 7. Telegram Assistant (optional)
 * **A real assistant in your pocket:** chat by **text or voice message** — "how's my day?", "mark gym as ok", "rest day for stretching today", "add dentist friday 2:30pm", "I studied docker 40 minutes: volumes", "what expires this month?", "write in my diary: best stretching ever". Gemini reads your real data and acts through safe tools.
@@ -136,7 +136,7 @@ Daily_Personal_Gamification/
 ├── ai_review.py        # AI deep reviews: review packs and answer grading
 ├── ai_quest.py         # AI quest planner (no dates or deadlines)
 ├── ai_insight.py       # Insight of the day for the wallpaper (one Gemini call per day)
-├── ai_diary.py         # Opt-in gentle reflection on a diary day
+├── ai_diary.py         # Opt-in honest reflection on a diary day
 ├── ai_weekly.py        # Weekly summary for the Graphs tab (one Gemini call per week)
 ├── ui_helpers.py       # Shared confirmation dialog
 ├── tests/              # Database, AI and assistant tests (unittest, no network)

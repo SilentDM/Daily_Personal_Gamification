@@ -1,5 +1,5 @@
 """Diary: a page per day with mood & energy, guided writing exercises, notes from the Schedule,
-a look back (calendar, search, on this day, highlights) and an optional gentle AI reflection.
+a look back (calendar, search, on this day, highlights) and an optional honest AI reflection.
 
 Everything written is encrypted (secure.py); with a PIN the tab stays locked until unlocked.
 """
@@ -364,8 +364,9 @@ class DiaryView(ft.Row):
             title=ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=ACCENT),
                           ft.Text("Before the first reflection", weight=ft.FontWeight.BOLD)]),
             content=ft.Container(width=520, content=ft.Column([
-                ft.Text("Only when you click, the selected day's page, exercises, habit notes and mood are sent to "
-                        "Google's Gemini to write a short, gentle reflection. Nothing is ever sent automatically.",
+                ft.Text("Only when you click, the selected day's page, exercises, habit notes, habit answers and "
+                        "mood are sent to Google's Gemini for an honest, impartial reflection — it will point out "
+                        "patterns and your own part in things, not just comfort you. Nothing is sent automatically.",
                         size=13),
                 ft.Text("On Gemini's free tier, Google may use that text to improve its products. Skip this for "
                         "anything you wouldn't want to leave your computer.", size=13, color=ft.Colors.AMBER_200),
@@ -692,7 +693,7 @@ class DiaryView(ft.Row):
         if self.ai_error:
             body.append(ft.Text(self.ai_error, size=12, color=ft.Colors.RED_ACCENT))
         if not configured:
-            body.append(ft.Text("Optional: add a Gemini key (Options → AI) to ask for a gentle reflection on a day.",
+            body.append(ft.Text("Optional: add a Gemini key (Options → AI) to ask for an honest reflection on a day.",
                                 size=12, color=ft.Colors.GREY_500))
         else:
             body.append(ft.Row([

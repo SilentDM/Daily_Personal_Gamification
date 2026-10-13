@@ -151,8 +151,10 @@ class ReflectionTests(DbTestCase):
         db.save_diary_entry(TODAY - timedelta(days=1), body="yesterday secret")
         db.add_diary_exercise(TODAY, "win", {"win": LONG})
         db.set_habit_note(aid, TODAY, "toes!", highlight=True)
+        self.log_today(aid, "Excellent", 10)
         prompt = ai_diary.build_prompt(TODAY, {"win": "Win of the day"})
-        for part in ("Felt proud today", "MOOD: 4/5", "Win of the day", "toes!", "[highlight]"):
+        for part in ("Felt proud today", "MOOD: 4/5", "Win of the day", "toes!", "[highlight]",
+                     "HABITS THAT DAY:\n- Stretching: Excellent"):
             self.assertIn(part, prompt)
         self.assertNotIn("yesterday secret", prompt)
 
