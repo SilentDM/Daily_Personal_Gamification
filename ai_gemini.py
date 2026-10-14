@@ -21,6 +21,7 @@ TIMEOUT_SECONDS = 90
 MODELS_CACHE_DAYS = 7
 SETTING_MODELS = "ai_models_cache"      # hud_settings: {"at": iso, "models": [...]}
 SETTING_PREFERRED = "ai_preferred_model"
+MAX_OUTPUT_TOKENS_CAP = 16384  # ceiling when an answer hits the limit and is asked again
 
 _request_lock = threading.Lock()  # one request at a time keeps us under the free-tier RPM
 
@@ -167,6 +168,15 @@ def _is_bad_key(exc) -> bool:
     return _error_code(exc) in (401, 403) or "api_key_invalid" in text or "api key not valid" in text
 
 
+def _finish_reason(response) -> str:
+    """'STOP', 'MAX_TOKENS', 'SAFETY'… of the first candidate ('' when unknown)."""
+    try:
+        reason = response.candidates[0].finish_reason
+    except (AttributeError, IndexError, TypeError):
+        return ""
+    return getattr(reason, "name", str(reason or "")).split(".")[-1]
+
+
 # ------------------------------------------------------------------ generation
 def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_output_tokens: int = 8192,
              tools=None, max_tool_calls: int = 8):
@@ -208,7 +218,19 @@ def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_out
         rate_limited, last_error = 0, None
         for model in models:
             try:
-                response = client.models.generate_content(model=model, contents=prompt, config=config)
+                response, budget = None, max_output_tokens
+                while True:
+                    response = client.models.generate_content(model=model, contents=prompt, config=config)
+                    # Thinking models spend the same output budget on their hidden reasoning, so a long
+                    # answer can stop half-way (finish_reason MAX_TOKENS). Ask again with more room instead
+                    # of returning a cut answer.
+                    if _finish_reason(response) != "MAX_TOKENS" or budget >= MAX_OUTPUT_TOKENS_CAP:
+                        break
+                    budget = min(budget * 4, MAX_OUTPUT_TOKENS_CAP)
+                    log.info("Gemini %s hit the output limit; retrying with %d tokens", model, budget)
+                    config = config.model_copy(update={"max_output_tokens": budget})
+                if _finish_reason(response) == "MAX_TOKENS":
+                    log.warning("Gemini %s answer is still cut at %d tokens", model, budget)
                 text = (response.text or "").strip()
                 if not text:
                     last_error = "empty response"

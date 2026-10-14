@@ -43,6 +43,7 @@ class FakeClient:
     def __init__(self, behaviour, listed=None):
         self.behaviour = behaviour
         self.calls = []
+        self.budgets = []
         names = listed or list(behaviour)
         self.models = SimpleNamespace(
             list=lambda: [SimpleNamespace(name=n, supported_actions=["generateContent"]) for n in names],
@@ -54,6 +55,10 @@ class FakeClient:
         result = self.behaviour[model]
         if isinstance(result, Exception):
             raise result
+        if isinstance(result, list):  # a sequence of (text, finish_reason) answers, one per call
+            text, reason = result.pop(0)
+            self.budgets.append(config.max_output_tokens)
+            return SimpleNamespace(text=text, candidates=[SimpleNamespace(finish_reason=reason)])
         return SimpleNamespace(text=result)
 
 
@@ -92,6 +97,23 @@ class GenerateTests(AiTestCase):
         self.assertEqual(model, "models/gemini-2.0-flash")
         self.assertEqual(pack.key_concepts[0].name, "Image")
         self.assertEqual(client.calls, ["models/gemini-2.5-flash", "models/gemini-2.0-flash"])
+
+    def test_cut_answer_is_asked_again_with_more_room(self):
+        from google.genai import types
+        client = self.use_client(FakeClient({"models/gemini-2.5-flash": [
+            ("Half of the reflec", types.FinishReason.MAX_TOKENS),
+            ("The whole reflection.", types.FinishReason.STOP)]}))
+        text, _ = ai_gemini.generate("prompt", "system", max_output_tokens=2048)
+        self.assertEqual(text, "The whole reflection.")
+        self.assertEqual(client.budgets, [2048, 8192])
+
+    def test_retry_stops_at_the_cap(self):
+        from google.genai import types
+        cut = types.FinishReason.MAX_TOKENS
+        client = self.use_client(FakeClient({"models/gemini-2.5-flash": [("a", cut), ("ab", cut), ("abc", cut)]}))
+        text, _ = ai_gemini.generate("prompt", "system", max_output_tokens=2048)
+        self.assertEqual(client.budgets, [2048, 8192, ai_gemini.MAX_OUTPUT_TOKENS_CAP])
+        self.assertEqual(text, "abc")  # best effort after the cap
 
     def test_invalid_json_from_one_model_tries_the_next(self):
         self.use_client(FakeClient({"models/gemini-2.5-flash": "not json {",

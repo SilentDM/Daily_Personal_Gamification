@@ -86,6 +86,6 @@ def reflect(day, exercise_titles: dict = None) -> str:
         raise ai_gemini.AIError("Write something first: there is nothing to reflect on yet.")
     text, _ = ai_gemini.generate(build_prompt(day, exercise_titles),
                                  SYSTEM.format(language=ai_insight.language()),
-                                 temperature=0.5, max_output_tokens=2048)
+                                 temperature=0.5, max_output_tokens=4096)
     db.set_diary_reflection(day, text.strip())
     return text.strip()
