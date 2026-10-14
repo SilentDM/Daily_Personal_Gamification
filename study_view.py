@@ -793,7 +793,7 @@ class StudyView(ft.Row):
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=10, padding=14,
         )
 
-        entries = db.get_journal(sid)
+        entries = db.get_journal(sid)[::-1]  # oldest first: the journal reads in the order things were studied
         entry_controls = [self._entry_card(e) for e in entries] or [
             ft.Text("No entries yet. Log what you study as you go — the wrap-up comes at the end.",
                     color=ft.Colors.GREY_500, italic=True)]
