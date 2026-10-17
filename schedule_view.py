@@ -1,6 +1,7 @@
 import flet as ft
 import database as db
 import settings
+from i18n import tr, trn, day_short
 from datetime import date, timedelta
 from ui_helpers import confirm_action
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
@@ -9,7 +10,6 @@ from constants import (
     POSITIVE_SCORES,
     NEGATIVE_SCORES,
     CATEGORIES,
-    DAY_NAMES,
     REST_STATUS,
 )
 
@@ -67,10 +67,10 @@ class ScheduleView(ft.Column):
         self._sync_week()
 
         # Gamification banner elements
-        self.streak_text = ft.Text("0 Days Streak", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_ACCENT)
-        self.level_text = ft.Text("Level 1 • Novice", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT)
+        self.streak_text = ft.Text("", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_ACCENT)
+        self.level_text = ft.Text("", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT)
         self.xp_bar = ft.ProgressBar(value=0.0, width=180, color=ft.Colors.CYAN_ACCENT, bgcolor=ft.Colors.GREY_800)
-        self.xp_fraction_text = ft.Text("0 / 10 XP", size=12, color=ft.Colors.GREY_400)
+        self.xp_fraction_text = ft.Text("", size=12, color=ft.Colors.GREY_400)
 
         self.render()
 
@@ -80,13 +80,14 @@ class ScheduleView(ft.Column):
         streak = db.get_current_streak()
         total_xp, level, xp_in_level, rank_title = db.get_user_xp_and_level()
 
-        self.streak_text.value = f"{streak} Day{'s' if streak != 1 else ''} Streak"
-        self.level_text.value = f"Level {level} / 100 • {rank_title}"
+        self.streak_text.value = trn("{n} Day Streak", "{n} Days Streak", streak)
+        self.level_text.value = tr("Level {level} / 100 • {rank}", level=level, rank=tr(rank_title))
         self.xp_bar.value = min(xp_in_level / 10.0, 1.0)
         if level >= 100:
-            self.xp_fraction_text.value = "MAX LEVEL REACHED! (1,000 XP)"
+            self.xp_fraction_text.value = tr("MAX LEVEL REACHED! (1,000 XP)")
         else:
-            self.xp_fraction_text.value = f"{xp_in_level:.1f} / 10 XP to Lvl {level + 1} (Total: {total_xp:.1f} / 1000)"
+            self.xp_fraction_text.value = tr("{xp} / 10 XP to Lvl {next} (Total: {total} / 1000)",
+                                             xp=f"{xp_in_level:.1f}", next=level + 1, total=f"{total_xp:.1f}")
 
     def calculate_daily_scores(self):
         self._sync_week()
@@ -220,7 +221,7 @@ class ScheduleView(ft.Column):
 
     def export_csv_clicked(self, e):
         db.export_to_csv()
-        e.control.content = "Exported to Desktop!"
+        e.control.content = tr("Exported to Desktop!")
         e.control.icon = ft.Icons.CHECK
         self.app_page.update()
 
@@ -299,10 +300,10 @@ class ScheduleView(ft.Column):
 
     def _edit_activity(self, act):
         act_id, name, category, is_neg = act
-        name_f = ft.TextField(label="Name", value=name, dense=True, autofocus=True)
+        name_f = ft.TextField(label=tr("Name"), value=name, dense=True, autofocus=True)
         cats = ["Vice / Avoid"] if is_neg else [c for c in CATEGORIES if c != "Vice / Avoid"]
-        cat_dd = ft.Dropdown(label="Category", value=category if category in cats else cats[0], dense=True,
-                             options=[ft.DropdownOption(c) for c in cats])
+        cat_dd = ft.Dropdown(label=tr("Category"), value=category if category in cats else cats[0], dense=True,
+                             options=[ft.DropdownOption(key=c, text=tr(c)) for c in cats])
 
         def save(e=None):
             if (name_f.value or "").strip():
@@ -312,13 +313,13 @@ class ScheduleView(ft.Column):
 
         name_f.on_submit = save
         self._dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("Edit habit", weight=ft.FontWeight.BOLD),
+            modal=True, title=ft.Text(tr("Edit habit"), weight=ft.FontWeight.BOLD),
             content=ft.Container(width=400, content=ft.Column([
                 name_f, cat_dd,
-                ft.Text("Vice / bad habit (inverted scoring)" if is_neg else "Positive habit", size=12,
+                ft.Text(tr("Vice / bad habit (inverted scoring)") if is_neg else tr("Positive habit"), size=12,
                         color=ft.Colors.GREY_400),
             ], spacing=12, tight=True)),
-            actions=[ft.TextButton("Cancel", on_click=self._close), ft.Button("Save", on_click=save)]))
+            actions=[ft.TextButton(tr("Cancel"), on_click=self._close), ft.Button(tr("Save"), on_click=save)]))
 
     def _confirm_delete(self, act):
         self.modal = True  # shortcuts stay off while the dialog is open
@@ -327,15 +328,15 @@ class ScheduleView(ft.Column):
             self.modal = False
             self.on_delete_activity(act[0])
 
-        confirm_action(self.app_page, "Delete habit?",
-                       f"'{act[1]}' will be removed from the grid, charts and daily XP.", done,
-                       on_cancel=lambda: setattr(self, "modal", False))
+        confirm_action(self.app_page, tr("Delete habit?"),
+                       tr("'{name}' will be removed from the grid, charts and daily XP.", name=act[1]), done,
+                       confirm_label=tr("Delete"), on_cancel=lambda: setattr(self, "modal", False))
 
     def _reminder_settings(self):
         current = reminder_time()
-        enabled = ft.Switch(label="Remind me to do my check-in", value=bool(current))
+        enabled = ft.Switch(label=tr("Remind me to do my check-in"), value=bool(current))
         times = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
-        time_dd = ft.Dropdown(label="At", value=current or DEFAULT_REMINDER, dense=True, width=140, menu_height=320,
+        time_dd = ft.Dropdown(label=tr("At"), value=current or DEFAULT_REMINDER, dense=True, width=140, menu_height=320,
                               options=[ft.DropdownOption(t) for t in times])
 
         def save(e):
@@ -345,13 +346,13 @@ class ScheduleView(ft.Column):
 
         self._dialog(ft.AlertDialog(
             modal=True, title=ft.Row([ft.Icon(ft.Icons.NOTIFICATIONS_ACTIVE_OUTLINED),
-                                      ft.Text("Nightly check-in reminder", weight=ft.FontWeight.BOLD)]),
+                                      ft.Text(tr("Nightly check-in reminder"), weight=ft.FontWeight.BOLD)]),
             content=ft.Container(width=420, content=ft.Column([
                 enabled, time_dd,
-                ft.Text("A tray notification appears at this time only if some of today's habits are still "
-                        "unmarked. The tracker also opens on this tab.", size=12, color=ft.Colors.GREY_400),
+                ft.Text(tr("A tray notification appears at this time only if some of today's habits are still "
+                           "unmarked. The tracker also opens on this tab."), size=12, color=ft.Colors.GREY_400),
             ], spacing=12, tight=True)),
-            actions=[ft.TextButton("Cancel", on_click=self._close), ft.Button("Save", on_click=save)]))
+            actions=[ft.TextButton(tr("Cancel"), on_click=self._close), ft.Button(tr("Save"), on_click=save)]))
 
     # ------------------------------------------------------------ rendering
     def render(self):
@@ -381,10 +382,10 @@ class ScheduleView(ft.Column):
                 ft.VerticalDivider(width=30),
                 ft.Column([self.level_text, ft.Row([self.xp_bar, self.xp_fraction_text])], spacing=3),
                 ft.Row([
-                    ft.Button(content="Quick-Fill Today", icon=ft.Icons.BOLT, icon_color=ft.Colors.AMBER_ACCENT,
+                    ft.Button(content=tr("Quick-Fill Today"), icon=ft.Icons.BOLT, icon_color=ft.Colors.AMBER_ACCENT,
                               on_click=self.quick_fill_today, disabled=not self.viewing_current,
-                              tooltip="Marks every unmarked habit today as Ok / Resisted"),
-                    ft.Button(content="Export CSV", icon=ft.Icons.DOWNLOAD, on_click=self.export_csv_clicked),
+                              tooltip=tr("Marks every unmarked habit today as Ok / Resisted")),
+                    ft.Button(content=tr("Export CSV"), icon=ft.Icons.DOWNLOAD, on_click=self.export_csv_clicked),
                 ]),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=12, padding=15,
@@ -395,30 +396,34 @@ class ScheduleView(ft.Column):
             marked = sum(1 for a in self._activities if answered(self._logs.get((a[0], self.today_idx))))
             total = len(self._activities)
             progress = ft.Container(
-                content=ft.Text(f"Today {marked}/{total} marked" + (" ✓" if marked == total else ""), size=13,
+                content=ft.Text(tr("Today {marked}/{total} marked", marked=marked, total=total) +
+                                (" ✓" if marked == total else ""), size=13,
                                 weight=ft.FontWeight.BOLD,
                                 color=ft.Colors.BLACK if marked == total else ft.Colors.CYAN_ACCENT),
                 bgcolor=ft.Colors.GREEN_ACCENT if marked == total else ft.Colors.with_opacity(0.12, ft.Colors.CYAN),
                 border_radius=12, padding=ft.Padding.symmetric(horizontal=10, vertical=4))
         else:
-            progress = ft.Text("• Editing a past week (XP updates accordingly)", size=14, color=ft.Colors.CYAN_ACCENT)
+            progress = ft.Text(tr("• Editing a past week (XP updates accordingly)"), size=14,
+                               color=ft.Colors.CYAN_ACCENT)
         rem = reminder_time()
         return ft.Container(
             content=ft.Row([
-                ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=ft.Colors.CYAN_ACCENT, tooltip="Previous week",
+                ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=ft.Colors.CYAN_ACCENT, tooltip=tr("Previous week"),
                               on_click=lambda e: self._shift_week(-1)),
-                ft.Text(f"Week {self.week} ({self.year})", size=22, weight=ft.FontWeight.BOLD),
-                ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=ft.Colors.CYAN_ACCENT, tooltip="Next week",
+                ft.Text(tr("Week {week} ({year})", week=self.week, year=self.year), size=22,
+                        weight=ft.FontWeight.BOLD),
+                ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=ft.Colors.CYAN_ACCENT, tooltip=tr("Next week"),
                               disabled=self.viewing_current, on_click=lambda e: self._shift_week(1)),
                 ft.Text(self._week_range_label(), size=14, color=ft.Colors.GREY_400),
                 progress,
-                ft.Button(content="This week", icon=ft.Icons.TODAY, disabled=self.viewing_current,
+                ft.Button(content=tr("This week"), icon=ft.Icons.TODAY, disabled=self.viewing_current,
                           on_click=lambda e: self._go_current_week()),
                 ft.Container(expand=True),
-                ft.Text("Keys: 1-4 mark • R rest • N note • 0 clear • arrows move", size=11, color=ft.Colors.GREY_500),
+                ft.Text(tr("Keys: 1-4 mark • R rest • N note • 0 clear • arrows move"), size=11,
+                        color=ft.Colors.GREY_500),
                 ft.IconButton(ft.Icons.NOTIFICATIONS_ACTIVE if rem else ft.Icons.NOTIFICATIONS_OFF_OUTLINED,
                               icon_color=ft.Colors.AMBER_ACCENT if rem else ft.Colors.GREY_500,
-                              tooltip=f"Check-in reminder at {rem}" if rem else "Check-in reminder off",
+                              tooltip=tr("Check-in reminder at {time}", time=rem) if rem else tr("Check-in reminder off"),
                               on_click=lambda e: self._reminder_settings()),
             ], spacing=8),
             padding=ft.Padding.only(left=20, right=20, top=5, bottom=5))
@@ -427,13 +432,14 @@ class ScheduleView(ft.Column):
         return TODAY_W if d == self.today_idx else DAY_W
 
     def _header_row(self):
-        cells = [ft.Container(content=ft.Text("Activity & Category", weight=ft.FontWeight.BOLD, size=14),
+        cells = [ft.Container(content=ft.Text(tr("Activity & Category"), weight=ft.FontWeight.BOLD, size=14),
                               width=TITLE_W, padding=10)]
-        for i, day in enumerate(DAY_NAMES):
+        for i in range(7):
+            day = day_short(i)
             is_today = i == self.today_idx
             future = i > self._last_editable_day()
             cells.append(ft.Container(
-                content=ft.Text(day + (" (Today)" if is_today else ""), weight=ft.FontWeight.BOLD,
+                content=ft.Text(day + (tr(" (Today)") if is_today else ""), weight=ft.FontWeight.BOLD,
                                 color=ft.Colors.CYAN_ACCENT if is_today else (
                                     ft.Colors.GREY_600 if future else ft.Colors.WHITE)),
                 width=self._day_width(i), alignment=ft.Alignment.CENTER,
@@ -449,7 +455,7 @@ class ScheduleView(ft.Column):
         cells = [ft.Container(
             content=ft.Row([
                 ft.Text(act_name, size=13, weight=ft.FontWeight.W_500, expand=True),
-                ft.Container(content=ft.Text(category, size=10, color=cat_color, weight=ft.FontWeight.BOLD),
+                ft.Container(content=ft.Text(tr(category), size=10, color=cat_color, weight=ft.FontWeight.BOLD),
                              border=ft.Border.all(1, cat_color), border_radius=4,
                              padding=ft.Padding.symmetric(horizontal=4, vertical=1)),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -470,14 +476,14 @@ class ScheduleView(ft.Column):
                 bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.CYAN) if d == self.today_idx else None))
         cells.append(ft.Container(
             content=ft.Row([
-                ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16, icon_color=ft.Colors.GREY_400, tooltip="Edit habit",
+                ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16, icon_color=ft.Colors.GREY_400, tooltip=tr("Edit habit"),
                               on_click=lambda e, a=act: self._edit_activity(a)),
-                ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=16, icon_color=ft.Colors.GREY_400, tooltip="Move Up",
+                ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=16, icon_color=ft.Colors.GREY_400, tooltip=tr("Move Up"),
                               on_click=lambda e, a=act_id: self.on_move_activity(a, "up")),
-                ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=16, icon_color=ft.Colors.GREY_400, tooltip="Move Down",
+                ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=16, icon_color=ft.Colors.GREY_400, tooltip=tr("Move Down"),
                               on_click=lambda e, a=act_id: self.on_move_activity(a, "down")),
                 ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_400, icon_size=18,
-                              tooltip="Delete activity", on_click=lambda e, a=act: self._confirm_delete(a)),
+                              tooltip=tr("Delete activity"), on_click=lambda e, a=act: self._confirm_delete(a)),
             ], spacing=0, alignment=ft.MainAxisAlignment.END),
             width=ACTIONS_W, alignment=ft.Alignment.CENTER))
         return ft.Container(content=ft.Row(cells), padding=ft.Padding.symmetric(horizontal=15, vertical=2))
@@ -489,22 +495,23 @@ class ScheduleView(ft.Column):
             selected = status == current
             color = score_color(score)
             buttons.append(ft.Container(
-                content=ft.Text(SHORT_LABELS.get(status, status), size=11, weight=ft.FontWeight.BOLD,
+                content=ft.Text(tr(SHORT_LABELS.get(status, status)), size=11, weight=ft.FontWeight.BOLD,
                                 color=ft.Colors.WHITE if selected else ft.Colors.GREY_400, no_wrap=True),
                 bgcolor=color if selected else None,
                 border=ft.Border.all(1, color if selected else ft.Colors.GREY_700),
                 border_radius=6, padding=ft.Padding.symmetric(horizontal=6, vertical=6),
                 alignment=ft.Alignment.CENTER, expand=True, ink=True,
-                tooltip=f"{status} (+{score}) • key {i}" + (" • click again to clear" if selected else ""),
+                tooltip=tr("{status} (+{score}) • key {key}", status=tr(status), score=score, key=i) +
+                (tr(" • click again to clear") if selected else ""),
                 on_click=lambda e, s=status: self._click_today(row, act, s, current)))
         if not act[3]:  # positive habits can rest; vices never do
             selected = current == REST_STATUS
             allowed = selected or self.can_rest(act[0], act[3], self.today_idx)
             used = db.rest_days_used(act[0], self.year, self.week, exclude_day=self.today_idx)
-            tip = ("Rest day — doesn't count in any score • click again to clear" if selected else
-                   f"Rest day: this habit doesn't apply today; no score impact • key R • "
-                   f"{db.rest_limit() - used} of {db.rest_limit()} left this week" if allowed else
-                   f"No rest days left this week ({db.rest_limit()} used)")
+            tip = (tr("Rest day — doesn't count in any score • click again to clear") if selected else
+                   tr("Rest day: this habit doesn't apply today; no score impact • key R • "
+                      "{left} of {limit} left this week", left=db.rest_limit() - used, limit=db.rest_limit())
+                   if allowed else tr("No rest days left this week ({n} used)", n=db.rest_limit()))
             buttons.append(ft.Container(
                 content=ft.Icon(ft.Icons.BEDTIME_OUTLINED if not selected else ft.Icons.BEDTIME, size=16,
                                 color=ft.Colors.WHITE if selected else (ft.Colors.GREY_400 if allowed
@@ -522,7 +529,7 @@ class ScheduleView(ft.Column):
                 border=ft.Border.all(1, ft.Colors.PINK_ACCENT_100 if mark else ft.Colors.GREY_700),
                 border_radius=6, padding=ft.Padding.symmetric(horizontal=4, vertical=5), width=30,
                 alignment=ft.Alignment.CENTER, ink=True,
-                tooltip="Edit your diary note • key N" if mark else "Write a diary note about it • key N",
+                tooltip=tr("Edit your diary note • key N") if mark else tr("Write a diary note about it • key N"),
                 on_click=lambda e: self.open_note(act, self.today_idx)))
         return ft.Row(buttons, spacing=3)
 
@@ -532,34 +539,34 @@ class ScheduleView(ft.Column):
         has_answer = score is not None or is_rest
         mark = self._note_mark(act[0], d) if self.notes_on() else ""
         chip = ft.Container(
-            content=ft.Text((SHORT_LABELS.get(status, status) if has_answer else "—") + (f" {mark}" if mark else ""),
+            content=ft.Text((tr(SHORT_LABELS.get(status, status)) if has_answer else "—") + (f" {mark}" if mark else ""),
                             size=11,
                             weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE if has_answer else ft.Colors.GREY_500),
             width=DAY_W - 8, height=30, border_radius=6, alignment=ft.Alignment.CENTER,
             bgcolor=REST_COLOR if is_rest else (score_color(score) if has_answer else
                                                 ft.Colors.with_opacity(0.05, ft.Colors.WHITE)),
             border=None if has_answer else ft.Border.all(1, ft.Colors.GREY_800))
-        items = [ft.PopupMenuItem(content=ft.Text(f"{s}  (+{sc})"), checked=s == status,
+        items = [ft.PopupMenuItem(content=ft.Text(f"{tr(s)}  (+{sc})"), checked=s == status,
                                   on_click=lambda e, s=s: self._pick_past(row, act, d, s))
                  for s, sc in options_for(act[3])]
         if not act[3] and (is_rest or self.can_rest(act[0], act[3], d)):
-            items.append(ft.PopupMenuItem(content=ft.Text("Rest  (no score)"), checked=is_rest,
+            items.append(ft.PopupMenuItem(content=ft.Text(tr("Rest  (no score)")), checked=is_rest,
                                           on_click=lambda e: self._pick_past(row, act, d, REST_STATUS)))
-        items.append(ft.PopupMenuItem(content=ft.Text("Clear"), on_click=lambda e: self._pick_past(row, act, d, "-")))
+        items.append(ft.PopupMenuItem(content=ft.Text(tr("Clear")), on_click=lambda e: self._pick_past(row, act, d, "-")))
         if self.notes_on():
-            items.append(ft.PopupMenuItem(content=ft.Text("Edit diary note…" if mark else "Write a diary note…"),
+            items.append(ft.PopupMenuItem(content=ft.Text(tr("Edit diary note…") if mark else tr("Write a diary note…")),
                                           icon=ft.Icons.EDIT_NOTE, on_click=lambda e: self.open_note(act, d)))
-        label = ("rest day" if is_rest else (status if has_answer else "not marked")) + \
-            (" • has a diary note" if mark else "")
-        return ft.PopupMenuButton(content=chip, items=items, tooltip=f"{DAY_NAMES[d]}: {label}")
+        label = (tr("rest day") if is_rest else (tr(status) if has_answer else tr("not marked"))) + \
+            (tr(" • has a diary note") if mark else "")
+        return ft.PopupMenuButton(content=chip, items=items, tooltip=f"{day_short(d)}: {label}")
 
     def _add_row(self):
-        new_input = ft.TextField(hint_text="New activity name...", width=200, dense=True, text_size=13)
+        new_input = ft.TextField(hint_text=tr("New activity name..."), width=200, dense=True, text_size=13)
         new_input.on_focus = lambda e: setattr(self, "typing", True)
         new_input.on_blur = lambda e: setattr(self, "typing", False)
         cat_dropdown = ft.Dropdown(value="Routine", width=130, dense=True, text_size=12, content_padding=5,
-                                   options=[ft.DropdownOption(cat) for cat in CATEGORIES])
-        bad_habit = ft.Checkbox(label="Vice / Bad Habit", value=False)
+                                   options=[ft.DropdownOption(key=cat, text=tr(cat)) for cat in CATEGORIES])
+        bad_habit = ft.Checkbox(label=tr("Vice / Bad Habit"), value=False)
 
         def on_cat_change(e):
             bad_habit.value = cat_dropdown.value == "Vice / Avoid"
@@ -579,11 +586,11 @@ class ScheduleView(ft.Column):
         return ft.Container(
             content=ft.Row([new_input, cat_dropdown, bad_habit,
                             ft.IconButton(icon=ft.Icons.ADD_CIRCLE, icon_color=ft.Colors.CYAN_ACCENT, icon_size=28,
-                                          tooltip="Add Activity", on_click=add_clicked)]),
+                                          tooltip=tr("Add Activity"), on_click=add_clicked)]),
             padding=ft.Padding.only(left=15, top=10))
 
     def _footer_row(self):
-        cells = [ft.Container(content=ft.Text("Daily Score (0-10)", weight=ft.FontWeight.BOLD, size=14),
+        cells = [ft.Container(content=ft.Text(tr("Daily Score (0-10)"), weight=ft.FontWeight.BOLD, size=14),
                               width=TITLE_W, padding=10)]
         for d in range(7):
             text = ft.Text("- / 10", weight=ft.FontWeight.BOLD, size=13)

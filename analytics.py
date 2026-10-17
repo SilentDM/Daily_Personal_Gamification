@@ -2,7 +2,8 @@
 from datetime import date, timedelta
 
 import database as db
-from constants import DAY_NAMES, REST_STATUS
+from constants import REST_STATUS
+from i18n import day_short, tr
 
 # key -> (label, number of days)
 PERIODS = {
@@ -149,7 +150,7 @@ def habit_matrix(key: str, today: date = None):
             columns.append((f"{wk:%d/%m}", max(wk, start), min(wk + timedelta(days=6), end)))
             wk += timedelta(days=7)
     else:
-        columns = [(DAY_NAMES[d.weekday()][0] if key == "7d" else f"{d.day}", d, d) for d in _days(start, end)]
+        columns = [(day_short(d.weekday()) if key == "7d" else f"{d.day}", d, d) for d in _days(start, end)]
     logs = habit_logs(start, end)
     rests = rest_logs(start, end)
     rows = []
@@ -162,7 +163,7 @@ def habit_matrix(key: str, today: date = None):
             if len(cell) == 1:
                 statuses.append(cell[0][1])
             elif cell:
-                statuses.append(f"{len(cell)} days" + (f", {rested} rest" if rested else ""))
+                statuses.append(tr("{n} days", n=len(cell)) + (tr(", {n} rest", n=rested) if rested else ""))
             else:
                 statuses.append(REST_STATUS if rested else None)
             rest_counts.append(rested)
@@ -192,7 +193,7 @@ def weekday_pattern(key: str, today: date = None):
     per = {i: [] for i in range(7)}
     for d, v in daily_scores(start, end).items():
         per[d.weekday()].append(v)
-    return [(DAY_NAMES[i], sum(v) / len(v) if v else None, len(v)) for i, v in per.items()]
+    return [(day_short(i), sum(v) / len(v) if v else None, len(v)) for i, v in per.items()]
 
 
 def year_map(today: date = None):

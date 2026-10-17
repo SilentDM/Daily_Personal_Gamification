@@ -62,6 +62,7 @@ import assistant_tools
 from assistant import assistant
 from notifier import Notifier
 from applog import setup_logging
+from i18n import tr, trn
 from ui_helpers import update_ui, wake_ui
 
 from schedule_view import ScheduleView, SETTING_REMINDED, reminder_time as schedule_reminder_time
@@ -172,10 +173,10 @@ def main(page: ft.Page):
     db.init_db()
 
     if not db.get_activities():
-        initial_tasks = [
+        initial_tasks = [tr(t) for t in (
             "Workout / Gym", "Stretching", "Healthy Diet",
             "1h Study / Course", "Walk with Dog"
-        ]
+        )]
         for task in initial_tasks:
             db.add_activity(task)
 
@@ -203,17 +204,17 @@ def main(page: ft.Page):
     icons = ft.Icons
     tabs = [t for t in [
         (schedule_view, lambda: schedule_view.render(),
-         icons.CALENDAR_VIEW_WEEK_OUTLINED, icons.CALENDAR_VIEW_WEEK, "Schedule"),
-        (graphs_view, lambda: graphs_view.refresh(), icons.BAR_CHART_OUTLINED, icons.BAR_CHART, "Graphs"),
-        (todo_view, lambda: todo_view.render(), icons.CHECKLIST_OUTLINED, icons.CHECKLIST, "Quests"),
-        (study_view, lambda: study_view.refresh_list(), icons.SCHOOL_OUTLINED, icons.SCHOOL, "Study"),
-        (diary_view, lambda: diary_view.render(), icons.MENU_BOOK_OUTLINED, icons.MENU_BOOK, "Diary"),
-        (wallpaper_view, lambda: wallpaper_view.render(), icons.WALLPAPER_OUTLINED, icons.WALLPAPER, "Wallpaper"),
+         icons.CALENDAR_VIEW_WEEK_OUTLINED, icons.CALENDAR_VIEW_WEEK, tr("Schedule")),
+        (graphs_view, lambda: graphs_view.refresh(), icons.BAR_CHART_OUTLINED, icons.BAR_CHART, tr("Graphs")),
+        (todo_view, lambda: todo_view.render(), icons.CHECKLIST_OUTLINED, icons.CHECKLIST, tr("Quests")),
+        (study_view, lambda: study_view.refresh_list(), icons.SCHOOL_OUTLINED, icons.SCHOOL, tr("Study")),
+        (diary_view, lambda: diary_view.render(), icons.MENU_BOOK_OUTLINED, icons.MENU_BOOK, tr("Diary")),
+        (wallpaper_view, lambda: wallpaper_view.render(), icons.WALLPAPER_OUTLINED, icons.WALLPAPER, tr("Wallpaper")),
         (calendar_view, lambda: calendar_view.render(),
-         icons.CALENDAR_MONTH_OUTLINED, icons.CALENDAR_MONTH, "Calendar"),
+         icons.CALENDAR_MONTH_OUTLINED, icons.CALENDAR_MONTH, tr("Calendar")),
         (documents_view, lambda: documents_view.render(),
-         icons.FOLDER_SHARED_OUTLINED, icons.FOLDER_SHARED, "Documents"),
-        (options_view, lambda: options_view.render(), icons.SETTINGS_OUTLINED, icons.SETTINGS, "Options"),
+         icons.FOLDER_SHARED_OUTLINED, icons.FOLDER_SHARED, tr("Documents")),
+        (options_view, lambda: options_view.render(), icons.SETTINGS_OUTLINED, icons.SETTINGS, tr("Options")),
     ] if t[0] is not None]
 
     def on_nav_change(e):
@@ -255,7 +256,7 @@ def main(page: ft.Page):
             content=ft.IconButton(
                 icon=ft.Icons.POWER_SETTINGS_NEW,
                 icon_color=ft.Colors.RED_400,
-                tooltip="Quit Application Completely",
+                tooltip=tr("Quit Application Completely"),
                 on_click=lambda e: clean_quit()
             ),
             padding=ft.Padding.only(bottom=20)
@@ -291,9 +292,9 @@ def main(page: ft.Page):
     if not TRAY_INITIALIZED:
         TRAY_INITIALIZED = True
         tray_menu = pystray.Menu(
-            pystray.MenuItem("Open Tracker", show_window, default=True),
-            pystray.MenuItem("Refresh Wallpaper", force_refresh_wallpaper),
-            pystray.MenuItem("Exit", quit_from_tray)
+            pystray.MenuItem(tr("Open Tracker"), show_window, default=True),
+            pystray.MenuItem(tr("Refresh Wallpaper"), force_refresh_wallpaper),
+            pystray.MenuItem(tr("Exit"), quit_from_tray)
         )
         tray_icon_instance = pystray.Icon("GamificationTracker", create_tray_icon_image(), APP_TITLE, menu=tray_menu)
         threading.Thread(target=tray_icon_instance.run, daemon=True).start()
@@ -319,11 +320,12 @@ def main(page: ft.Page):
             ], spacing=10),
             content=ft.Column([
                 ft.Text(subtitle, size=14, color=ft.Colors.WHITE),
-                ft.Text("Marking as completed awards +10 XP towards your Discipline Level!", size=12, color=ft.Colors.GREEN_ACCENT)
+                ft.Text(tr("Marking as completed awards +10 XP towards your Discipline Level!"), size=12,
+                        color=ft.Colors.GREEN_ACCENT)
             ], tight=True, spacing=8),
             actions=[
-                ft.Button("Dismiss", on_click=dismiss),
-                ft.Button("I Did It! (+10 XP)", icon=ft.Icons.CHECK, on_click=mark_done)
+                ft.Button(tr("Dismiss"), on_click=dismiss),
+                ft.Button(tr("I Did It! (+10 XP)"), icon=ft.Icons.CHECK, on_click=mark_done)
             ]
         )
         page.show_dialog(dlg)
@@ -331,11 +333,14 @@ def main(page: ft.Page):
     def doc_reminder_text(doc, stage):
         exp = date.fromisoformat(doc["expiration_date"])
         if stage == "due":
-            return f"'{doc['title']}' " + ("expires today." if doc["days_left"] == 0 else
-                                          f"expired on {exp:%d/%m/%Y}.") + " Renew it when you can."
+            if doc["days_left"] == 0:
+                return tr("'{title}' expires today. Renew it when you can.", title=doc["title"])
+            return tr("'{title}' expired on {date}. Renew it when you can.", title=doc["title"], date=f"{exp:%d/%m/%Y}")
         if stage == "week":
-            return f"'{doc['title']}' expires in {doc['days_left']} days ({exp:%d/%m/%Y})."
-        return f"'{doc['title']}' expires on {exp:%d/%m/%Y} — time to plan the renewal."
+            return tr("'{title}' expires in {n} days ({date}).", title=doc["title"], n=doc["days_left"],
+                      date=f"{exp:%d/%m/%Y}")
+        return tr("'{title}' expires on {date} — time to plan the renewal.", title=doc["title"],
+                  date=f"{exp:%d/%m/%Y}")
 
     assistant.start()  # Telegram (only when turned on in Options and a token is saved)
     notifier = Notifier(assistant, checkin_time=schedule_reminder_time)
@@ -379,8 +384,8 @@ def main(page: ft.Page):
                         show_tab(0)  # the tracker opens straight on the Schedule
                         try:
                             tray_icon_instance.notify(
-                                f"{left} habit{'s' if left != 1 else ''} still unmarked today.",
-                                "Daily check-in")
+                                trn("{n} habit still unmarked today.", "{n} habits still unmarked today.", left),
+                                tr("Daily check-in"))
                         except Exception:
                             log.exception("check-in notification failed")
 
@@ -394,7 +399,7 @@ def main(page: ft.Page):
                     if documents_view and 8 <= now.hour < 22:
                         for doc, stage in db.get_doc_notifications():
                             try:
-                                tray_icon_instance.notify(doc_reminder_text(doc, stage), "Document reminder")
+                                tray_icon_instance.notify(doc_reminder_text(doc, stage), tr("Document reminder"))
                                 db.mark_doc_notified(doc["id"], stage)
                             except Exception:
                                 log.exception("document notification failed")
@@ -422,13 +427,14 @@ def main(page: ft.Page):
                             if remind_at <= now < window_end and key + ("remind",) not in NOTIFIED_ALARMS:
                                 NOTIFIED_ALARMS.add(key + ("remind",))
                                 if occ["all_day"]:
-                                    when = "today (all day)" if start.date() == today else "tomorrow (all day)"
+                                    when = tr("today (all day)") if start.date() == today else tr("tomorrow (all day)")
                                 else:
                                     mins = int((start - now).total_seconds() // 60) + 1
-                                    when = f"at {start:%H:%M} (in {mins} min)" if mins <= 90 else f"at {start:%H:%M}"
+                                    when = tr("at {time} (in {n} min)", time=f"{start:%H:%M}", n=mins) if mins <= 90 \
+                                        else tr("at {time}", time=f"{start:%H:%M}")
                                 winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
                                 try:
-                                    tray_icon_instance.notify(f"'{title}' {when}", "Upcoming appointment")
+                                    tray_icon_instance.notify(f"'{title}' {when}", tr("Upcoming appointment"))
                                 except Exception:
                                     log.exception("tray notification failed")
 
@@ -440,8 +446,8 @@ def main(page: ft.Page):
                                 winsound.MessageBeep(winsound.MB_ICONASTERISK)
                                 restore_window_from_tray(page)
                                 show_alarm_dialog(
-                                    "🚨 Event Starting NOW!",
-                                    f"'{title}' starts now ({start:%H:%M})!",
+                                    tr("🚨 Event Starting NOW!"),
+                                    tr("'{title}' starts now ({time})!", title=title, time=f"{start:%H:%M}"),
                                     occ["id"], occ["date"]
                                 )
             except Exception:

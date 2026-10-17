@@ -6,13 +6,14 @@ from pathlib import Path
 import flet as ft
 
 import ai_gemini
-import ai_insight
 import database as db
+import i18n
 import settings
 import telegram_api
 import tts
 from schedule_view import reminder_time as checkin_reminder_time
 from ui_helpers import update_ui
+from i18n import tr
 
 HALF_HOURS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
 BRIEFING_TIMES = [t for t in HALF_HOURS if "05:00" <= t <= "11:30"]
@@ -45,15 +46,15 @@ class OptionsView(ft.Column):
 
     @staticmethod
     def _card(title, controls, icon=None):
-        head = ft.Row([ft.Icon(icon, size=18), ft.Text(title, size=15, weight=ft.FontWeight.BOLD)], spacing=8) \
-            if icon else ft.Text(title, size=15, weight=ft.FontWeight.BOLD)
+        head = ft.Row([ft.Icon(icon, size=18), ft.Text(tr(title), size=15, weight=ft.FontWeight.BOLD)], spacing=8) \
+            if icon else ft.Text(tr(title), size=15, weight=ft.FontWeight.BOLD)
         return ft.Container(content=ft.Column([head, *controls], spacing=10,
                                               horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
                             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border_radius=10, padding=16)
 
     @staticmethod
     def _hint(text):
-        return ft.Text(text, size=11, color=ft.Colors.GREY_400)
+        return ft.Text(tr(text), size=11, color=ft.Colors.GREY_400)
 
     def _set(self, key, value, rerender=False):
         settings.set(key, value)
@@ -61,12 +62,12 @@ class OptionsView(ft.Column):
             self.render()
 
     def _switch(self, label, key, rerender=False):
-        return ft.Switch(label=label, value=settings.flag(key),
+        return ft.Switch(label=tr(label), value=settings.flag(key),
                          on_change=lambda e: self._set(key, bool(e.control.value), rerender))
 
     def _dropdown(self, label, key, options, width=150, on_change=None):
-        return ft.Dropdown(label=label, value=settings.get(key), width=width, dense=True,
-                           options=[ft.DropdownOption(key=k, text=v) for k, v in options],
+        return ft.Dropdown(label=tr(label), value=settings.get(key), width=width, dense=True,
+                           options=[ft.DropdownOption(key=k, text=tr(v)) for k, v in options],
                            on_select=on_change or (lambda e: self._set(key, e.control.value)))
 
     # ------------------------------------------------------------ actions
@@ -76,38 +77,38 @@ class OptionsView(ft.Column):
 
     def _toggle_startup(self, on):
         error = settings.set_start_with_windows(on)
-        self.message = f"Could not change it: {error}" if error else \
-            ("The tracker will open when you sign in to Windows." if on else "It won't open with Windows anymore.")
+        self.message = tr("Could not change it: {error}", error=error) if error else \
+            (tr("The tracker will open when you sign in to Windows.") if on else tr("It won't open with Windows anymore."))
         self.render()
 
     def _set_score_rule(self, key, value):
         settings.set(key, value)
-        self.message = "Saved. Streaks, colors and the wallpaper use the new rule."
+        self.message = tr("Saved. Streaks, colors and the wallpaper use the new rule.")
         self.render()
 
     def _save_backup_dir(self, value):
         value = (value or "").strip()
         if value and not Path(value).is_dir():
-            self.message = "That folder doesn't exist."
+            self.message = tr("That folder doesn't exist.")
         else:
             settings.set("backup_dir", value)
-            self.message = "Each daily backup is also copied to that folder." if value else \
-                "Extra backup folder removed (backups stay in the data folder)."
+            self.message = tr("Each daily backup is also copied to that folder.") if value else \
+                tr("Extra backup folder removed (backups stay in the data folder).")
         self.render()
 
     def _open_data_folder(self, e=None):
         try:
             os.startfile(str(Path(db.get_db_path()).parent))
         except Exception as exc:
-            self.message = f"Could not open it: {exc}"
+            self.message = tr("Could not open it: {error}", error=exc)
             self.render()
 
     def _export(self, e=None):
         try:
             path = db.export_to_csv()
-            self.message = f"Exported to {path}" if path else "Exported to your Desktop."
+            self.message = tr("Exported to {path}", path=path) if path else tr("Exported to your Desktop.")
         except Exception as exc:
-            self.message = f"Export failed: {exc}"
+            self.message = tr("Export failed: {error}", error=exc)
         self.render()
 
     def _ai_settings(self, e=None):
@@ -127,10 +128,10 @@ class OptionsView(ft.Column):
     def _save_token(self, token):
         token = (token or "").strip()
         if not token:
-            self.tg_message = "Paste the token from @BotFather first."
+            self.tg_message = tr("Paste the token from @BotFather first.")
             self.render()
             return
-        self.tg_message = "Checking the token…"
+        self.tg_message = tr("Checking the token…")
         self.render()
 
         def work():
@@ -139,7 +140,7 @@ class OptionsView(ft.Column):
             if self.assistant:
                 self.assistant.unpair()  # a new bot means a new pairing
                 self.assistant.start()
-            return f"Saved — connected to @{me.get('username', '?')}."
+            return tr("Saved — connected to @{bot}.", bot=me.get("username", "?"))
         self._run_bg(work)
 
     def _remove_token(self, e=None):
@@ -148,7 +149,7 @@ class OptionsView(ft.Column):
         if self.assistant:
             self.assistant.stop()
             self.assistant.unpair()
-        self.tg_message = "Token removed and assistant turned off."
+        self.tg_message = tr("Token removed and assistant turned off.")
         self.render()
 
     def _toggle_assistant(self, on):
@@ -156,7 +157,7 @@ class OptionsView(ft.Column):
         if self.assistant:
             if on:
                 if not self.assistant.start():
-                    self.tg_message = self.assistant.last_error or "Save a bot token first."
+                    self.tg_message = self.assistant.last_error or tr("Save a bot token first.")
             else:
                 self.assistant.stop()
         self.render()
@@ -166,22 +167,22 @@ class OptionsView(ft.Column):
     def _unpair(self, e=None):
         if self.assistant:
             self.assistant.unpair()
-        self.tg_message = "Unpaired. Send the new code to pair again."
+        self.tg_message = tr("Unpaired. Send the new code to pair again.")
         self.render()
 
     def _test_message(self, e=None):
         def work():
-            if not (self.assistant and self.assistant.send("👋 Test message from your tracker.", speak=True)):
-                return self.assistant.last_error if self.assistant else "Assistant unavailable."
-            return "Test message sent."
+            if not (self.assistant and self.assistant.send(tr("👋 Test message from your tracker."), speak=True)):
+                return self.assistant.last_error if self.assistant else tr("Assistant unavailable.")
+            return tr("Test message sent.")
         self._run_bg(work)
 
     def _send_checkin(self, e=None):
         def work():
             if self.assistant and self.assistant.send_checkin():
-                return "Check-in sent."
-            return "Nothing to ask: every habit is answered today." if self.assistant and self.assistant.chat_id \
-                else "Pair your Telegram first."
+                return tr("Check-in sent.")
+            return tr("Nothing to ask: every habit is answered today.") if self.assistant and self.assistant.chat_id \
+                else tr("Pair your Telegram first.")
         self._run_bg(work)
 
     # ------------------------------------------------------------ render
@@ -191,14 +192,19 @@ class OptionsView(ft.Column):
         self._update()
 
     def _general_card(self):
-        lang_dd = ft.Dropdown(label="AI & messages language", value=ai_insight.language(), width=240, dense=True,
-                              options=[ft.DropdownOption(lang) for lang in ai_insight.LANGUAGES],
-                              on_select=lambda e: db.set_hud_setting(ai_insight.SETTING_LANGUAGE, e.control.value))
+        chosen = i18n.stored_language()
+        lang_dd = ft.Dropdown(label="Idioma / Language", value=chosen, width=240, dense=True,
+                              options=[ft.DropdownOption(key=k, text=v) for k, v in i18n.LANGUAGES.items()],
+                              on_select=lambda e: self._set_language(e.control.value))
         controls = [
             lang_dd,
-            self._hint("Used by Gemini (reviews, insights, quest planner) and the Telegram assistant. "
-                       "The app itself stays in English."),
-            ft.Switch(label="Start with Windows", value=settings.starts_with_windows(),
+            self._hint("The whole app: screens, wallpaper, notifications, the Telegram assistant and what the AI "
+                       "writes. Your data is never changed."),
+        ]
+        if chosen != i18n.language():
+            controls.append(self._restart_row())
+        controls += [
+            ft.Switch(label=tr("Start with Windows"), value=settings.starts_with_windows(),
                       on_change=lambda e: self._toggle_startup(bool(e.control.value))),
             self._switch("Closing the window keeps it running in the tray", "close_to_tray"),
             self._hint("Off: the X button quits the app (reminders and the assistant stop with it)."),
@@ -208,10 +214,22 @@ class OptionsView(ft.Column):
             controls.append(ft.Text(self.message, size=12, color=ft.Colors.AMBER_ACCENT))
         return self._card("General", controls, ft.Icons.TUNE)
 
+    def _set_language(self, code):
+        i18n.save_language(code)
+        self.render()
+
+    def _restart_row(self):
+        return ft.Row([
+            ft.Icon(ft.Icons.RESTART_ALT, color=ft.Colors.AMBER_ACCENT, size=18),
+            ft.Text(tr("Restart the app to apply."), size=13, color=ft.Colors.AMBER_ACCENT, expand=True),
+            ft.Button(tr("Restart now"), icon=ft.Icons.RESTART_ALT, disabled=self.restart_app is None,
+                      on_click=lambda e: self.restart_app()),
+        ], spacing=8)
+
     def _tabs_card(self):
         enabled = settings.enabled_tabs()
-        checks = [ft.Checkbox(label="Schedule (always on)", value=True, disabled=True)]
-        checks += [ft.Checkbox(label=label, value=tab in enabled,
+        checks = [ft.Checkbox(label=tr("Schedule (always on)"), value=True, disabled=True)]
+        checks += [ft.Checkbox(label=tr(label), value=tab in enabled,
                                on_change=lambda e, t=tab: self._toggle_tab(t, bool(e.control.value)))
                    for tab, label in settings.OPTIONAL_TABS.items()]
         controls = [
@@ -221,12 +239,7 @@ class OptionsView(ft.Column):
                    vertical_alignment=ft.CrossAxisAlignment.START),
         ]
         if set(enabled) != self.loaded_tabs:
-            controls.append(ft.Row([
-                ft.Icon(ft.Icons.RESTART_ALT, color=ft.Colors.AMBER_ACCENT, size=18),
-                ft.Text("Restart the app to apply.", size=13, color=ft.Colors.AMBER_ACCENT, expand=True),
-                ft.Button("Restart now", icon=ft.Icons.RESTART_ALT, disabled=self.restart_app is None,
-                          on_click=lambda e: self.restart_app()),
-            ], spacing=8))
+            controls.append(self._restart_row())
         return self._card("Tabs", controls, ft.Icons.TAB)
 
     def _scoring_card(self):
@@ -252,15 +265,15 @@ class OptionsView(ft.Column):
         ], ft.Icons.SCOREBOARD_OUTLINED)
 
     def _data_card(self):
-        folder = ft.TextField(label="Extra backup folder (e.g. OneDrive)", value=settings.get("backup_dir"),
-                              dense=True, expand=True, hint_text="Empty = only the data folder")
+        folder = ft.TextField(label=tr("Extra backup folder (e.g. OneDrive)"), value=settings.get("backup_dir"),
+                              dense=True, expand=True, hint_text=tr("Empty = only the data folder"))
         return self._card("Data", [
-            ft.Row([folder, ft.IconButton(ft.Icons.SAVE, tooltip="Save backup folder",
+            ft.Row([folder, ft.IconButton(ft.Icons.SAVE, tooltip=tr("Save backup folder"),
                                           on_click=lambda e: self._save_backup_dir(folder.value))]),
             self._hint("A copy of the database is made every day before the app starts."),
             ft.Row([
-                ft.OutlinedButton("Open data folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._open_data_folder),
-                ft.OutlinedButton("Export habits (CSV)", icon=ft.Icons.DOWNLOAD, on_click=self._export),
+                ft.OutlinedButton(tr("Open data folder"), icon=ft.Icons.FOLDER_OPEN, on_click=self._open_data_folder),
+                ft.OutlinedButton(tr("Export habits (CSV)"), icon=ft.Icons.DOWNLOAD, on_click=self._export),
             ], spacing=10, wrap=True),
         ], ft.Icons.STORAGE)
 
@@ -271,62 +284,62 @@ class OptionsView(ft.Column):
                     color=ft.Colors.GREEN_ACCENT if ok else ft.Colors.AMBER_ACCENT),
             self._hint("One key powers study reviews, the wallpaper insight, the quest planner and the "
                        "Telegram assistant (free tier is enough)."),
-            ft.Row([ft.OutlinedButton("Gemini settings…", icon=ft.Icons.AUTO_AWESOME, on_click=self._ai_settings)]),
+            ft.Row([ft.OutlinedButton(tr("Gemini settings…"), icon=ft.Icons.AUTO_AWESOME, on_click=self._ai_settings)]),
         ], ft.Icons.AUTO_AWESOME)
 
     def _telegram_card(self):
         a = self.assistant
         has_token = bool(telegram_api.get_token())
         enabled = settings.flag("tg_enabled")
-        status = a.status_text() if a else "Unavailable."
+        status = a.status_text() if a else tr("Unavailable.")
         running = bool(a and a.running)
-        token_f = ft.TextField(label="Bot token", password=True, can_reveal_password=True, dense=True, expand=True,
-                               hint_text="Saved ✓ (paste a new one to replace)" if has_token else
-                               "Paste the token from @BotFather")
+        token_f = ft.TextField(label=tr("Bot token"), password=True, can_reveal_password=True, dense=True, expand=True,
+                               hint_text=tr("Saved ✓ (paste a new one to replace)") if has_token else
+                               tr("Paste the token from @BotFather"))
         controls = [
             self._hint("1) In Telegram, talk to @BotFather → /newbot → copy the token.  "
                        "2) Paste it here and save.  3) Turn the assistant on and send the pairing code to your bot."),
             ft.Row([token_f,
-                    ft.IconButton(ft.Icons.SAVE, tooltip="Check and save the token",
+                    ft.IconButton(ft.Icons.SAVE, tooltip=tr("Check and save the token"),
                                   on_click=lambda e: self._save_token(token_f.value)),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove the saved token", disabled=not has_token,
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip=tr("Remove the saved token"), disabled=not has_token,
                                   on_click=self._remove_token)]),
-            ft.Switch(label="Assistant on", value=enabled, disabled=not has_token,
+            ft.Switch(label=tr("Assistant on"), value=enabled, disabled=not has_token,
                       on_change=lambda e: self._toggle_assistant(bool(e.control.value))),
             ft.Text(status, size=13, selectable=True,
                     color=ft.Colors.GREEN_ACCENT if running and a.chat_id else ft.Colors.AMBER_ACCENT),
         ]
         if a and enabled and not a.chat_id:
             controls.append(ft.Container(
-                content=ft.Row([ft.Text("Pairing code", size=13),
+                content=ft.Row([ft.Text(tr("Pairing code"), size=13),
                                 ft.Text(a.pairing_code, size=22, weight=ft.FontWeight.BOLD, selectable=True,
                                         font_family="Consolas")], spacing=12),
                 padding=10, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH))
         if a and a.chat_id:
             controls.append(ft.Row([
-                ft.OutlinedButton("Send test message", icon=ft.Icons.SEND, on_click=self._test_message,
+                ft.OutlinedButton(tr("Send test message"), icon=ft.Icons.SEND, on_click=self._test_message,
                                   disabled=not running),
-                ft.OutlinedButton("Send check-in now", icon=ft.Icons.CHECKLIST, on_click=self._send_checkin,
+                ft.OutlinedButton(tr("Send check-in now"), icon=ft.Icons.CHECKLIST, on_click=self._send_checkin,
                                   disabled=not running),
-                ft.TextButton("Unpair", icon=ft.Icons.LINK_OFF, on_click=self._unpair),
+                ft.TextButton(tr("Unpair"), icon=ft.Icons.LINK_OFF, on_click=self._unpair),
             ], spacing=8, wrap=True))
 
         mode = ft.SegmentedButton(
-            segments=[ft.Segment(value=k, label=ft.Text(v)) for k, v in settings.REPLY_MODES.items()],
+            segments=[ft.Segment(value=k, label=ft.Text(tr(v))) for k, v in settings.REPLY_MODES.items()],
             selected=[settings.get("tg_reply_mode")], show_selected_icon=False,
             on_change=lambda e: self._set("tg_reply_mode", e.control.selected[0], True) if e.control.selected else None)
         voice = ft.SegmentedButton(
-            segments=[ft.Segment(value=k, label=ft.Text(v)) for k, v in settings.VOICES.items()],
+            segments=[ft.Segment(value=k, label=ft.Text(tr(v))) for k, v in settings.VOICES.items()],
             selected=[settings.get("tg_voice")], show_selected_icon=False,
             disabled=settings.get("tg_reply_mode") == "text",
             on_change=lambda e: self._set("tg_voice", e.control.selected[0]) if e.control.selected else None)
         controls += [
             ft.Divider(height=1),
-            ft.Row([ft.Text("Replies", width=70), mode], spacing=10),
-            ft.Row([ft.Text("Voice", width=70), voice], spacing=10),
+            ft.Row([ft.Text(tr("Replies"), width=70), mode], spacing=10),
+            ft.Row([ft.Text(tr("Voice"), width=70), voice], spacing=10),
             self._hint("You can always talk to it by text or by voice message. Voice replies use Microsoft's "
-                       "neural voices (Brazilian Portuguese or English, following the language above)."
-                       + ("" if tts.AVAILABLE else "  ⚠ edge-tts isn't installed, so replies fall back to text.")),
+                       "neural voices (Brazilian Portuguese or English, following the app language)."),
+            *([] if tts.AVAILABLE else [self._hint("⚠ edge-tts isn't installed, so replies fall back to text.")]),
             self._hint("It can read everything and mark habits, add events, log studies and update quests — it "
                        "never deletes anything. It only works while this app is running."),
         ]
@@ -347,7 +360,8 @@ class OptionsView(ft.Column):
             self._switch("Documents expiring (window, 7 days, due)", "tg_documents"),
             self._switch("Study reviews due (after 09:00)", "tg_reviews"),
             self._switch("Evening check-in with answer buttons", "tg_checkin"),
-            self._hint(f"Sent at the Schedule's nightly reminder time ({checkin_at})." if checkin_at else
-                       "Turn on the nightly reminder in the Schedule tab (🔔) to pick its time."),
+            ft.Text(tr("Sent at the Schedule's nightly reminder time ({time}).", time=checkin_at) if checkin_at else
+                    tr("Turn on the nightly reminder in the Schedule tab (🔔) to pick its time."),
+                    size=11, color=ft.Colors.GREY_400),
             self._switch("Achievements (level up, streaks, quests, mastered chapters)", "tg_achievements"),
         ], ft.Icons.NOTIFICATIONS_ACTIVE_OUTLINED)

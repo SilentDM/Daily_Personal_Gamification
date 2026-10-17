@@ -18,6 +18,7 @@ import settings
 import telegram_api
 import tts
 from constants import POSITIVE_SCORES, NEGATIVE_SCORES, REST_STATUS, DAY_NAMES
+from i18n import tr, ai_language_name
 
 log = logging.getLogger("gamification")
 
@@ -44,7 +45,7 @@ def checkin_keyboard(d: date = None):
         if not neg and db.can_rest(aid, iso[0], iso[1], iso[2] - 1):
             answers.append(REST_STATUS)
         rows.append([{"text": f"— {name} —", "callback_data": "noop"}])
-        rows.append([{"text": SHORT.get(a, a), "callback_data": f"h|{aid}|{d.isoformat()}|{a}"} for a in answers])
+        rows.append([{"text": tr(SHORT.get(a, a)), "callback_data": f"h|{aid}|{d.isoformat()}|{a}"} for a in answers])
     if not pending:
         return None, None
     return messages.t("checkin_title", n=pending), rows
@@ -62,7 +63,7 @@ def day_score_text(d: date) -> str:
 # ------------------------------------------------------------------ prompts
 def system_prompt() -> str:
     now = datetime.now()
-    language = "Brazilian Portuguese" if messages.lang() == "pt" else "English"
+    language = ai_language_name()
     return f"""You are the personal assistant inside the user's habit-gamification app, talking on Telegram.
 Now: {DAY_NAMES[now.weekday()]} {now:%Y-%m-%d %H:%M}. Always answer in {language}.
 
@@ -112,7 +113,7 @@ class Assistant:
             return False
         bot = self._bot_factory()
         if not bot.token:
-            self.last_error = "No Telegram bot token saved yet."
+            self.last_error = tr("No Telegram bot token saved yet.")
             return False
         self.bot = bot
         self._stop = threading.Event()
@@ -131,15 +132,15 @@ class Assistant:
 
     def status_text(self) -> str:
         if not settings.flag("tg_enabled"):
-            return "Off."
+            return tr("Off.")
         if self.last_error:
-            return f"Problem: {self.last_error}"
+            return tr("Problem: {error}", error=self.last_error)
         if not self.running:
-            return "Not running (save a bot token and turn it on)."
-        name = f"@{self.bot_username}" if self.bot_username else "the bot"
+            return tr("Not running (save a bot token and turn it on).")
+        name = f"@{self.bot_username}" if self.bot_username else tr("the bot")
         if not self.chat_id:
-            return f"Running. Send  /start {self.pairing_code}  to {name} to pair your Telegram."
-        return f"Running and paired with your chat ({name})."
+            return tr("Running. Send  /start {code}  to {bot} to pair your Telegram.", code=self.pairing_code, bot=name)
+        return tr("Running and paired with your chat ({bot}).", bot=name)
 
     def _run(self, bot, stop):
         try:
@@ -264,7 +265,7 @@ class Assistant:
                 result = tools.mark_habit(habit, status, day)
         except ValueError:
             result = {"ok": False, "error": "?"}
-        self.bot.answer_callback(cq["id"], messages.t("marked", habit=result.get("habit", ""), answer=status)
+        self.bot.answer_callback(cq["id"], messages.t("marked", habit=result.get("habit", ""), answer=tr(status))
                                  if result.get("ok") else result.get("error", "")[:190])
         message_id = cq["message"]["message_id"]
         text, buttons = checkin_keyboard(date.fromisoformat(day))

@@ -37,9 +37,9 @@ Write in {language}."""
 
 
 def language() -> str:
-    settings = db.get_hud_settings()
-    lang = settings.get(SETTING_LANGUAGE) or settings.get(OLD_SETTING_LANGUAGE) or LANGUAGES[0]
-    return lang if lang in LANGUAGES else LANGUAGES[0]
+    """The language the AI writes in: the app language (Options → Language)."""
+    import i18n
+    return LANGUAGES[0] if i18n.language() == "pt" else "English"
 
 
 def cached_today():

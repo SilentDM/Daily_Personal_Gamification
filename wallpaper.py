@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import database as db
 from constants import SCORE_ORANGE
+from i18n import tr, trn
 
 log = logging.getLogger("gamification")
 
@@ -277,17 +278,17 @@ def _block(ctx, bid, data, width):
     if bid == "status":
         avg = data.get("today_avg")
         if avg is None:
-            status, color, txt = "NO ENTRIES YET", (160, 170, 185, 255), "Today: - / 10"
+            status, color, txt = tr("NO ENTRIES YET"), (160, 170, 185, 255), tr("Today: - / 10")
         else:
             goal = db.passing_score()
-            status = "PASSING" if avg >= goal else ("NEUTRAL" if avg >= SCORE_ORANGE else "NEEDS FOCUS")
+            status = tr("PASSING") if avg >= goal else (tr("NEUTRAL") if avg >= SCORE_ORANGE else tr("NEEDS FOCUS"))
             color = (0, 255, 180, 255) if avg >= goal else (
                 (255, 180, 0, 255) if avg >= SCORE_ORANGE else (255, 85, 85, 255))
-            txt = f"Today: {avg:.1f} / 10"
+            txt = tr("Today: {score} / 10", score=f"{avg:.1f}")
         streak = data.get("streak") or 0
 
         def draw(d, x, y, w):
-            d.text((x, y), f"STREAK: {streak} day{'s' if streak != 1 else ''}", fill=(255, 175, 40, 255),
+            d.text((x, y), trn("STREAK: {n} day", "STREAK: {n} days", streak), fill=(255, 175, 40, 255),
                    font=ctx.body_bold)
             right = f"{txt} [{status}]"
             d.text((x + w - ctx.body_bold.getlength(right), y), right, fill=color, font=ctx.body_bold)
@@ -305,8 +306,9 @@ def _block(ctx, bid, data, width):
             if fill_w > 0:
                 d.rounded_rectangle([x, y + int(4 * s), x + fill_w, y + int(4 * s) + bar_h], radius=bar_h // 2,
                                     fill=ctx.accent["bar"])
-            d.text((x, y + int(18 * s)), f"{xp_in_level:.1f} / 10 XP to Level {min(100, level + 1)} "
-                                         f"(Total: {total_xp:.1f}/1000)", fill=(160, 170, 185, 255), font=ctx.small)
+            d.text((x, y + int(18 * s)), tr("{xp} / 10 XP to Level {next} (Total: {total}/1000)",
+                                            xp=f"{xp_in_level:.1f}", next=min(100, level + 1),
+                                            total=f"{total_xp:.1f}"), fill=(160, 170, 185, 255), font=ctx.small)
 
         return int(42 * s), draw
 
@@ -314,22 +316,23 @@ def _block(ctx, bid, data, width):
         text = data.get("insight")
         if not text:
             return None
-        return _section(ctx, "INSIGHT OF THE DAY:", ctx.accent["header"], [text], width, bullet=False)
+        return _section(ctx, tr("INSIGHT OF THE DAY:"), ctx.accent["header"], [text], width, bullet=False)
 
     if bid == "quests":
         quests = data.get("quests") or []
         items = [f"{q['title']} ({int(q['progress_pct'])}%)" if q["progress_pct"] > 0 else q["title"] for q in quests]
-        return _section(ctx, "ACTIVE QUESTS:", (200, 210, 225, 255), items or ["All quests completed!"], width)
+        return _section(ctx, tr("ACTIVE QUESTS:"), (200, 210, 225, 255), items or [tr("All quests completed!")], width)
 
     if bid == "studies":
         items = []
         due = data.get("reviews") or []
         if due:
-            items.append(f"REVIEW DUE ({len(due)}): " + ", ".join(r["topic"] for r in due[:2]) +
+            items.append(tr("REVIEW DUE ({n}): ", n=len(due)) + ", ".join(r["topic"] for r in due[:2]) +
                          ("..." if len(due) > 2 else ""))
         for st in data.get("studies") or []:
             items.append(f"{st['topic']} -> {st['next_step']}" if st["next_step"] else f"{st['topic']} ({st['source']})")
-        return _section(ctx, "STUDIES:", ctx.accent["header"], items or ["No active chapters right now."], width)
+        return _section(ctx, tr("STUDIES:"), ctx.accent["header"], items or [tr("No active chapters right now.")],
+                        width)
 
     if bid == "calendar":
         events = data.get("events") or []
@@ -338,17 +341,17 @@ def _block(ctx, bid, data, width):
         items = []
         for occ in events:
             start = db.occurrence_start(occ)
-            when = "All day" if occ["all_day"] else f"{start:%H:%M}"
+            when = tr("All day") if occ["all_day"] else f"{start:%H:%M}"
             items.append(f"[{start:%d-%m} {when}] {occ['title']}")
-        return _section(ctx, "UPCOMING CALENDAR:", (255, 200, 100, 255), items, width)
+        return _section(ctx, tr("UPCOMING CALENDAR:"), (255, 200, 100, 255), items, width)
 
     if bid == "documents":
         docs = data.get("documents") or []
         if not docs:
             return None
-        items = [f"{title} [{'EXPIRED ' + str(abs(days)) + 'd ago' if days < 0 else 'expires in ' + str(days) + 'd'}]"
+        items = [f"{title} [" + (tr("EXPIRED {n}d ago", n=abs(days)) if days < 0 else tr("expires in {n}d", n=days)) + "]"
                  for title, _, _, days in docs]
-        return _section(ctx, "DOCUMENT ALERTS:", (255, 100, 100, 255), items, width)
+        return _section(ctx, tr("DOCUMENT ALERTS:"), (255, 100, 100, 255), items, width)
     return None
 
 
@@ -403,8 +406,9 @@ def build_hud_image(settings=None, screen=None):
     d.rounded_rectangle([x1, y1, x1 + card_w, y1 + card_h], radius=int(16 * scale), fill=(18, 22, 30, 225),
                         outline=accent["border"], width=max(2, int(2 * scale)))
     total_xp, level, _, rank = data.get("xp") or (0.0, 1, 0.0, "Novice")
-    d.text((x1 + ctx.pad, y1 + int(18 * scale)), "DAILY GAMIFICATION HUD", fill=accent["header"], font=ctx.sub)
-    d.text((x1 + ctx.pad, y1 + int(38 * scale)), f"Level {level} / 100 • {rank}", fill=(255, 255, 255, 255),
+    d.text((x1 + ctx.pad, y1 + int(18 * scale)), tr("DAILY GAMIFICATION HUD"), fill=accent["header"], font=ctx.sub)
+    d.text((x1 + ctx.pad, y1 + int(38 * scale)), tr("Level {level} / 100 • {rank}", level=level, rank=tr(rank)),
+           fill=(255, 255, 255, 255),
            font=ctx.title)
     for ci, col in enumerate(c for c in cols if c):
         cx = x1 + ctx.pad + ci * (col_w + gap)

@@ -163,6 +163,7 @@ def set_start_with_windows(on: bool) -> str:
         link.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=env, capture_output=True,
                                 text=True, timeout=20, creationflags=0x08000000 if sys.platform == "win32" else 0)
-        return "" if link.exists() else (result.stderr.strip() or "Could not create the shortcut")
+        from i18n import tr
+        return "" if link.exists() else (result.stderr.strip() or tr("Could not create the shortcut"))
     except Exception as exc:
         return str(exc)

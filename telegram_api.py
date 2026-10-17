@@ -10,6 +10,8 @@ import httpx
 
 log = logging.getLogger("gamification")
 
+from i18n import tr  # noqa: E402
+
 KEYRING_SERVICE = "DailyPersonalGamification"
 KEYRING_ACCOUNT = "telegram-bot-token"
 API = "https://api.telegram.org"
@@ -53,7 +55,7 @@ class Bot:
 
     def call(self, method: str, timeout: float = TIMEOUT, files=None, **params):
         if not self.token:
-            raise TelegramError("No Telegram bot token saved yet.")
+            raise TelegramError(tr("No Telegram bot token saved yet."))
         data = {k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in params.items() if v is not None}
         try:
             if files:
@@ -61,15 +63,15 @@ class Bot:
             else:
                 resp = self.client.post(self._url(method), data=data, timeout=timeout)
         except httpx.HTTPError as exc:
-            raise TelegramError(f"Could not reach Telegram: {exc}") from exc
+            raise TelegramError(tr("Could not reach Telegram: {error}", error=exc)) from exc
         try:
             body = resp.json()
         except ValueError:
-            raise TelegramError(f"Telegram answered HTTP {resp.status_code}")
+            raise TelegramError(tr("Telegram answered HTTP {code}", code=resp.status_code))
         if not body.get("ok"):
             desc = body.get("description", f"HTTP {resp.status_code}")
             if resp.status_code == 401:
-                raise TelegramError("Telegram rejected the bot token.")
+                raise TelegramError(tr("Telegram rejected the bot token."))
             raise TelegramError(desc)
         return body.get("result")
 
@@ -80,7 +82,7 @@ class Bot:
         """Long-polls for new messages / button presses. getUpdates' own `timeout` is the long-poll
         time, so the HTTP timeout must be longer (call() can't be used: its `timeout` means HTTP)."""
         if not self.token:
-            raise TelegramError("No Telegram bot token saved yet.")
+            raise TelegramError(tr("No Telegram bot token saved yet."))
         params = {"timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}
         if offset is not None:
             params["offset"] = offset
@@ -88,7 +90,7 @@ class Bot:
             resp = self.client.post(self._url("getUpdates"), data=params, timeout=timeout + 10)
             body = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise TelegramError(f"Could not reach Telegram: {exc}") from exc
+            raise TelegramError(tr("Could not reach Telegram: {error}", error=exc)) from exc
         if not body.get("ok"):
             raise TelegramError(body.get("description", "getUpdates failed"))
         return body.get("result", [])
@@ -128,5 +130,5 @@ class Bot:
             resp = self.client.get(f"{API}/file/bot{self.token}/{path}", timeout=60)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            raise TelegramError(f"Could not download the voice message: {exc}") from exc
+            raise TelegramError(tr("Could not download the voice message: {error}", error=exc)) from exc
         return resp.content

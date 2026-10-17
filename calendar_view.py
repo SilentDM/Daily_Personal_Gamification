@@ -4,17 +4,12 @@ from datetime import date, datetime, timedelta
 import flet as ft
 
 import database as db
-from constants import DAY_NAMES, XP_EVENT
+from constants import XP_EVENT
+from i18n import tr, day_name, day_short, month_name, month_short, fmt_long, fmt_month_year
 from study_view import open_review_dialog, REVIEW_COLOR
 from documents_view import open_doc_summary
 from ui_helpers import confirm_action
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
-
-MONTH_NAMES = [
-    "", "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-]
-WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 EVENT_COLORS = {
     "Cyan": ft.Colors.CYAN_400,
@@ -55,29 +50,29 @@ def fmt_time(hour: int, minute: int) -> str:
 
 def fmt_range(occ) -> str:
     if occ["all_day"]:
-        return "All day"
+        return tr("All day")
     start, end = db.occurrence_start(occ), db.occurrence_end(occ)
     end_txt = f"{end:%H:%M}" if end.date() == start.date() else f"{end:%H:%M} (+1d)"
     return f"{start:%H:%M} – {end_txt}"
 
 
 def fmt_date_long(d: date) -> str:
-    return f"{WEEKDAY_NAMES[d.weekday()]}, {d.day} {MONTH_NAMES[d.month]} {d.year}"
+    return fmt_long(d)
 
 
 def fmt_date_short(d: date) -> str:
-    return f"{DAY_NAMES[d.weekday()]}, {d.day} {MONTH_NAMES[d.month][:3]}"
+    return f"{day_short(d.weekday())}, {d.day} {month_short(d.month)}"
 
 
 def repeat_options(start: date):
     nth = start.day
     return [
-        ("none", "Does not repeat"),
-        ("daily", "Every day"),
-        ("weekdays", "Every weekday (Mon–Fri)"),
-        ("weekly", f"Weekly on {WEEKDAY_NAMES[start.weekday()]}"),
-        ("monthly", f"Monthly on day {nth}" + (" (or last day)" if nth > 28 else "")),
-        ("yearly", f"Yearly on {nth} {MONTH_NAMES[start.month]}"),
+        ("none", tr("Does not repeat")),
+        ("daily", tr("Every day")),
+        ("weekdays", tr("Every weekday (Mon–Fri)")),
+        ("weekly", tr("Weekly on {day}", day=day_name(start.weekday()))),
+        ("monthly", tr("Monthly on day {n}", n=nth) + (tr(" (or last day)") if nth > 28 else "")),
+        ("yearly", tr("Yearly on {n} {month}", n=nth, month=month_name(start.month))),
     ]
 
 
@@ -86,13 +81,14 @@ def repeat_text(occ) -> str:
         return ""
     label = dict(repeat_options(date.fromisoformat(occ["event_date"])))[occ["recurrence"]]
     if occ["recurrence_end"]:
-        label += f", until {date.fromisoformat(occ['recurrence_end']):%d/%m/%Y}"
+        label += tr(", until {date}", date=f"{date.fromisoformat(occ['recurrence_end']):%d/%m/%Y}")
     return label
 
 
 def reminder_text(occ) -> str:
     opts = ALL_DAY_REMINDER_OPTIONS if occ["all_day"] else REMINDER_OPTIONS
-    return dict(opts).get(occ["reminder_min"], f"{occ['reminder_min']} min before")
+    label = dict(opts).get(occ["reminder_min"])
+    return tr(label) if label else tr("{n} min before", n=occ["reminder_min"])
 
 
 def time_slots(extra_minutes=None):
@@ -224,28 +220,29 @@ class CalendarView(ft.Column):
     def _title_text(self) -> str:
         a = self.anchor
         if self.view == "month":
-            return f"{MONTH_NAMES[a.month]} {a.year}"
+            return fmt_month_year(a)
         if self.view == "week":
             start = a - timedelta(days=a.weekday())
             end = start + timedelta(days=6)
             if start.month == end.month:
-                return f"{start.day} – {end.day} {MONTH_NAMES[end.month]} {end.year}"
+                return tr("{start} – {end} {month} {year}", start=start.day, end=end.day, month=month_name(end.month),
+                          year=end.year)
             if start.year == end.year:
-                return f"{start.day} {MONTH_NAMES[start.month][:3]} – {end.day} {MONTH_NAMES[end.month][:3]} {end.year}"
+                return f"{start.day} {month_short(start.month)} – {end.day} {month_short(end.month)} {end.year}"
             return f"{start:%d/%m/%Y} – {end:%d/%m/%Y}"
         if self.view == "day":
             return fmt_date_long(a)
         if self.search:
-            return f'Search: "{self.search}"'
-        return f"Agenda from {a.day} {MONTH_NAMES[a.month][:3]} {a.year}"
+            return tr('Search: "{text}"', text=self.search)
+        return tr("Agenda from {day} {month} {year}", day=a.day, month=month_short(a.month), year=a.year)
 
     def _toolbar(self):
         switcher = ft.SegmentedButton(
             segments=[
-                ft.Segment(value="month", label=ft.Text("Month"), icon=ft.Icon(ft.Icons.CALENDAR_VIEW_MONTH)),
-                ft.Segment(value="week", label=ft.Text("Week"), icon=ft.Icon(ft.Icons.CALENDAR_VIEW_WEEK)),
-                ft.Segment(value="day", label=ft.Text("Day"), icon=ft.Icon(ft.Icons.CALENDAR_VIEW_DAY)),
-                ft.Segment(value="agenda", label=ft.Text("Agenda"), icon=ft.Icon(ft.Icons.VIEW_AGENDA)),
+                ft.Segment(value="month", label=ft.Text(tr("Month")), icon=ft.Icon(ft.Icons.CALENDAR_VIEW_MONTH)),
+                ft.Segment(value="week", label=ft.Text(tr("Week")), icon=ft.Icon(ft.Icons.CALENDAR_VIEW_WEEK)),
+                ft.Segment(value="day", label=ft.Text(tr("Day")), icon=ft.Icon(ft.Icons.CALENDAR_VIEW_DAY)),
+                ft.Segment(value="agenda", label=ft.Text(tr("Agenda")), icon=ft.Icon(ft.Icons.VIEW_AGENDA)),
             ],
             selected=[self.view],
             show_selected_icon=False,
@@ -254,14 +251,14 @@ class CalendarView(ft.Column):
         return ft.Container(
             content=ft.Row([
                 ft.Row([
-                    ft.OutlinedButton("Today", on_click=self.go_today),
-                    ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous", on_click=lambda e: self.step(-1)),
-                    ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next", on_click=lambda e: self.step(1)),
+                    ft.OutlinedButton(tr("Today"), on_click=self.go_today),
+                    ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip=tr("Previous"), on_click=lambda e: self.step(-1)),
+                    ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip=tr("Next"), on_click=lambda e: self.step(1)),
                     ft.Text(self._title_text(), size=22, weight=ft.FontWeight.BOLD),
                 ], spacing=6),
                 ft.Row([
                     switcher,
-                    ft.Button("New event", icon=ft.Icons.ADD, on_click=lambda e: self.open_editor()),
+                    ft.Button(tr("New event"), icon=ft.Icons.ADD, on_click=lambda e: self.open_editor()),
                 ], spacing=12),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
             padding=ft.Padding.only(left=16, right=16, top=14, bottom=10),
@@ -284,12 +281,12 @@ class CalendarView(ft.Column):
     def _review_chip(self, review):
         overdue = date.fromisoformat(review["due_date"]) < date.today()
         return ft.Container(
-            content=ft.Text(f"📚 Review: {review['topic']}", size=11, no_wrap=True,
+            content=ft.Text(tr("📚 Review: {topic}", topic=review["topic"]), size=11, no_wrap=True,
                             overflow=ft.TextOverflow.ELLIPSIS, color=ft.Colors.BLACK),
             bgcolor=ft.Colors.RED_ACCENT_100 if overdue else REVIEW_COLOR,
             border_radius=4,
             padding=ft.Padding.symmetric(horizontal=5, vertical=1),
-            tooltip=f"Study review {review['review_no']}" + (" (overdue)" if overdue else ""),
+            tooltip=tr("Study review {n}", n=review["review_no"]) + (tr(" (overdue)") if overdue else ""),
             on_click=lambda e, r=review: self._open_review(r),
         )
 
@@ -298,13 +295,15 @@ class CalendarView(ft.Column):
         return ft.Container(
             content=ft.Row([
                 ft.IconButton(ft.Icons.REPLAY, icon_color=REVIEW_COLOR, icon_size=18 if compact else 22,
-                              tooltip="Start review", on_click=lambda e, r=review: self._open_review(r)),
+                              tooltip=tr("Start review"), on_click=lambda e, r=review: self._open_review(r)),
                 ft.Container(width=4, height=28 if compact else 36, bgcolor=REVIEW_COLOR, border_radius=2),
                 ft.Column([
-                    ft.Text(f"Review: {review['topic']}", size=13 if compact else 14, weight=ft.FontWeight.W_600,
+                    ft.Text(tr("Review: {topic}", topic=review["topic"]), size=13 if compact else 14,
+                            weight=ft.FontWeight.W_600,
                             max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Text(f"Study review {review['review_no']}" +
-                            (f" • overdue since {date.fromisoformat(review['due_date']):%d/%m}" if overdue else ""),
+                    ft.Text(tr("Study review {n}", n=review["review_no"]) +
+                            (tr(" • overdue since {date}", date=f"{date.fromisoformat(review['due_date']):%d/%m}")
+                             if overdue else ""),
                             size=11, color=ft.Colors.RED_ACCENT_100 if overdue else ft.Colors.GREY_400),
                 ], spacing=0, expand=True, tight=True),
             ], spacing=8),
@@ -323,10 +322,11 @@ class CalendarView(ft.Column):
     def _doc_chip(self, doc):
         color, word = self.DOC_KIND_STYLE[doc["kind"]]
         return ft.Container(
-            content=ft.Text(f"📄 {doc['title']} {word}", size=11, no_wrap=True,
+            content=ft.Text(f"📄 {doc['title']} {tr(word)}", size=11, no_wrap=True,
                             overflow=ft.TextOverflow.ELLIPSIS, color=ft.Colors.BLACK),
             bgcolor=color, border_radius=4, padding=ft.Padding.symmetric(horizontal=5, vertical=1),
-            tooltip=f"{doc['doc_type']} • expires {date.fromisoformat(doc['expiration_date']):%d/%m/%Y}",
+            tooltip=tr("{type} • expires {date}", type=tr(doc["doc_type"]),
+                       date=f"{date.fromisoformat(doc['expiration_date']):%d/%m/%Y}"),
             on_click=lambda e, d=doc: open_doc_summary(self.app_page, d, on_done=self._changed),
         )
 
@@ -335,13 +335,14 @@ class CalendarView(ft.Column):
         return ft.Container(
             content=ft.Row([
                 ft.IconButton(ft.Icons.DESCRIPTION_OUTLINED, icon_color=color, icon_size=18 if compact else 22,
-                              tooltip="Open", on_click=lambda e, d=doc: open_doc_summary(self.app_page, d,
+                              tooltip=tr("Open"), on_click=lambda e, d=doc: open_doc_summary(self.app_page, d,
                                                                                          on_done=self._changed)),
                 ft.Container(width=4, height=28 if compact else 36, bgcolor=color, border_radius=2),
                 ft.Column([
-                    ft.Text(f"{doc['title']} — {word}", size=13 if compact else 14, weight=ft.FontWeight.W_600,
+                    ft.Text(f"{doc['title']} — {tr(word)}", size=13 if compact else 14, weight=ft.FontWeight.W_600,
                             max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Text(f"{doc['doc_type']} • expires {date.fromisoformat(doc['expiration_date']):%d/%m/%Y}",
+                    ft.Text(tr("{type} • expires {date}", type=tr(doc["doc_type"]),
+                               date=f"{date.fromisoformat(doc['expiration_date']):%d/%m/%Y}"),
                             size=11, color=ft.Colors.GREY_400),
                 ], spacing=0, expand=True, tight=True),
             ], spacing=8),
@@ -364,7 +365,7 @@ class CalendarView(ft.Column):
                 content=ft.Text(name, size=12, weight=ft.FontWeight.BOLD,
                                 color=ft.Colors.GREY_500 if i >= 5 else ft.Colors.GREY_300),
                 expand=True, alignment=ft.Alignment.CENTER, padding=6,
-            ) for i, name in enumerate(DAY_NAMES)
+            ) for i, name in enumerate(day_short(i) for i in range(7))
         ], spacing=4)
 
         rows = []
@@ -392,7 +393,7 @@ class CalendarView(ft.Column):
         total = len(chips)
         chips = chips[:max_chips]
         if total > max_chips:
-            chips.append(ft.Text(f"+{total - max_chips} more", size=10, color=ft.Colors.CYAN_ACCENT))
+            chips.append(ft.Text(tr("+{n} more", n=total - max_chips), size=10, color=ft.Colors.CYAN_ACCENT))
 
         return ft.Container(
             content=ft.Column([number, *chips], spacing=2, tight=True),
@@ -403,7 +404,7 @@ class CalendarView(ft.Column):
             border=ft.Border.all(1, ft.Colors.CYAN_ACCENT if is_today else ft.Colors.with_opacity(0.15, ft.Colors.GREY)),
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
             ink=True,
-            tooltip=f"{len(occs)} event(s) – open day" if occs else "Open day",
+            tooltip=tr("{n} event(s) – open day", n=len(occs)) if occs else tr("Open day"),
             on_click=lambda e, day=d: self.open_day(day),
         )
 
@@ -445,7 +446,7 @@ class CalendarView(ft.Column):
             is_today = d == today
             header_cells.append(ft.Container(
                 content=ft.Column([
-                    ft.Text(DAY_NAMES[d.weekday()].upper(), size=11,
+                    ft.Text(day_short(d.weekday()).upper(), size=11,
                             color=ft.Colors.CYAN_ACCENT if is_today else ft.Colors.GREY_400),
                     ft.Container(
                         content=ft.Text(str(d.day), size=18, weight=ft.FontWeight.BOLD,
@@ -456,7 +457,7 @@ class CalendarView(ft.Column):
                 ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
                 expand=True, padding=4, border_radius=8, ink=compact,
                 on_click=(lambda e, day=d: self.open_day(day)) if compact else None,
-                tooltip="Open day" if compact else None,
+                tooltip=tr("Open day") if compact else None,
             ))
 
         # all-day strip (only when there is something to show)
@@ -464,7 +465,7 @@ class CalendarView(ft.Column):
         reviews = self._reviews_by_day(days[0], days[-1])
         docs = self._docs_by_day(days[0], days[-1])
         if reviews or docs or any(o["all_day"] for d in days for o in by_day[d]):
-            cells = [ft.Container(content=ft.Text("all-day", size=10, color=ft.Colors.GREY_500),
+            cells = [ft.Container(content=ft.Text(tr("all-day"), size=10, color=ft.Colors.GREY_500),
                                   width=GUTTER_WIDTH, alignment=ft.Alignment.CENTER_RIGHT,
                                   padding=ft.Padding.only(right=6))]
             for d in days:
@@ -523,7 +524,7 @@ class CalendarView(ft.Column):
                 border=ft.Border.only(top=ft.BorderSide(1, ft.Colors.with_opacity(0.12, ft.Colors.GREY))),
                 bgcolor=ft.Colors.with_opacity(0.03 if weekend else 0.0, ft.Colors.WHITE),
                 ink=True,
-                tooltip=f"New event at {h:02d}:00",
+                tooltip=tr("New event at {time}", time=f"{h:02d}:00"),
                 on_click=lambda e, day=d, hour=h: self.open_editor(day=day, hour=hour),
             ) for h in range(24)
         ], spacing=0))
@@ -610,12 +611,12 @@ class CalendarView(ft.Column):
             ft.Row([
                 ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_size=18,
                               on_click=lambda e: self.set_view("day", (a.replace(day=1) - timedelta(days=1)).replace(day=1))),
-                ft.Text(f"{MONTH_NAMES[a.month]} {a.year}", weight=ft.FontWeight.BOLD),
+                ft.Text(fmt_month_year(a), weight=ft.FontWeight.BOLD),
                 ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_size=18,
                               on_click=lambda e: self.set_view("day", (a.replace(day=28) + timedelta(days=4)).replace(day=1))),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Row([ft.Container(content=ft.Text(n[0], size=10, color=ft.Colors.GREY_500), width=32,
-                                 alignment=ft.Alignment.CENTER) for n in DAY_NAMES], spacing=2),
+                                 alignment=ft.Alignment.CENTER) for n in (day_short(i) for i in range(7))], spacing=2),
             *[ft.Row([mini_cell(d) for d in week], spacing=2) for week in weeks],
         ], spacing=2)
 
@@ -625,14 +626,15 @@ class CalendarView(ft.Column):
         day_reviews = self._reviews_by_day(a, a).get(a, [])
         day_docs = self._docs_by_day(a, a).get(a, [])
         summary = ft.Column([
-            ft.Text("DAY SUMMARY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
-            ft.Text(f"{len(occs)} event(s) • {n_done} done • +{n_done * XP_EVENT} XP", size=13),
+            ft.Text(tr("DAY SUMMARY"), size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
+            ft.Text(tr("{n} event(s) • {done} done • +{xp} XP", n=len(occs), done=n_done, xp=n_done * XP_EVENT),
+                    size=13),
             *[self._doc_row(x, compact=True) for x in day_docs],
             *[self._review_row(r, compact=True) for r in day_reviews],
             *[self._agenda_row(o, (o["id"], o["date"]) in done, compact=True) for o in occs],
         ] if occs or day_reviews or day_docs else [
-            ft.Text("DAY SUMMARY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
-            ft.Text("Nothing scheduled. Click an hour to add an event.", size=12, color=ft.Colors.GREY_500),
+            ft.Text(tr("DAY SUMMARY"), size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_ACCENT),
+            ft.Text(tr("Nothing scheduled. Click an hour to add an event."), size=12, color=ft.Colors.GREY_500),
         ], spacing=6)
 
         return ft.Container(
@@ -644,10 +646,10 @@ class CalendarView(ft.Column):
     # ------------------------------------------------------------ agenda
     def _agenda_view(self):
         search_field = ft.TextField(
-            value=self.search, hint_text="Search events (title or notes)…", prefix_icon=ft.Icons.SEARCH,
+            value=self.search, hint_text=tr("Search events (title or notes)…"), prefix_icon=ft.Icons.SEARCH,
             dense=True, width=360,
             on_submit=lambda e: self._set_search(e.control.value),
-            suffix=ft.IconButton(ft.Icons.CLOSE, icon_size=16, tooltip="Clear",
+            suffix=ft.IconButton(ft.Icons.CLOSE, icon_size=16, tooltip=tr("Clear"),
                                  on_click=lambda e: self._set_search("")) if self.search else None,
         )
 
@@ -673,8 +675,8 @@ class CalendarView(ft.Column):
                 day_reviews = [r for r in day_reviews if needle in r["topic"].lower()]
             if not occs and not day_reviews and not day_docs:
                 continue
-            label = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else \
-                "Yesterday" if d == today - timedelta(days=1) else fmt_date_short(d)
+            label = tr("Today") if d == today else tr("Tomorrow") if d == today + timedelta(days=1) else \
+                tr("Yesterday") if d == today - timedelta(days=1) else fmt_date_short(d)
             items.append(ft.Container(
                 content=ft.Row([
                     ft.Text(label, size=14, weight=ft.FontWeight.BOLD,
@@ -689,15 +691,15 @@ class CalendarView(ft.Column):
             items.extend(self._agenda_row(o, (o["id"], o["date"]) in done) for o in occs)
 
         if not items:
-            msg = f'No events match "{self.search}".' if self.search else \
-                f"Nothing scheduled in the next {AGENDA_DAYS} days."
+            msg = tr('No events match "{text}".', text=self.search) if self.search else \
+                tr("Nothing scheduled in the next {n} days.", n=AGENDA_DAYS)
             items.append(ft.Container(content=ft.Text(msg, color=ft.Colors.GREY_500), padding=20))
         elif self.search and len(items) > 400:
             items = items[:400]
 
         return ft.Column([
             ft.Row([search_field,
-                    ft.Text("Press Enter to search the past and next 12 months" if not self.search else "",
+                    ft.Text(tr("Press Enter to search the past and next 12 months") if not self.search else "",
                             size=11, color=ft.Colors.GREY_500)], spacing=12),
             ft.ListView(items, expand=True, spacing=4),
         ], expand=True, spacing=8)
@@ -715,7 +717,7 @@ class CalendarView(ft.Column):
                     icon=ft.Icons.CHECK_CIRCLE if is_done else ft.Icons.RADIO_BUTTON_UNCHECKED,
                     icon_color=ft.Colors.GREEN_ACCENT if is_done else color,
                     icon_size=18 if compact else 22,
-                    tooltip="Undo" if is_done else f"Mark as done (+{XP_EVENT} XP)",
+                    tooltip=tr("Undo") if is_done else tr("Mark as done (+{xp} XP)", xp=XP_EVENT),
                     on_click=lambda e, o=occ: self.toggle_done(o),
                 ),
                 ft.Container(width=4, height=36 if not compact else 28, bgcolor=color, border_radius=2),
@@ -764,7 +766,7 @@ class CalendarView(ft.Column):
         if occ["notes"]:
             details.append(row(ft.Icons.NOTES, occ["notes"], ft.Colors.WHITE))
         details.append(row(ft.Icons.CHECK_CIRCLE if is_done else ft.Icons.RADIO_BUTTON_UNCHECKED,
-                           f"Done (+{XP_EVENT} XP earned)" if is_done else "Not done yet",
+                           tr("Done (+{xp} XP earned)", xp=XP_EVENT) if is_done else tr("Not done yet"),
                            ft.Colors.GREEN_ACCENT if is_done else ft.Colors.GREY_400))
 
         def do_toggle(e):
@@ -784,11 +786,11 @@ class CalendarView(ft.Column):
                           ft.Text(occ["title"], weight=ft.FontWeight.BOLD, expand=True)], spacing=10),
             content=ft.Container(content=ft.Column(details, spacing=10, tight=True), width=460),
             actions=[
-                ft.TextButton("Delete", icon=ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_300, on_click=do_delete),
-                ft.TextButton("Edit", icon=ft.Icons.EDIT, on_click=do_edit),
-                ft.Button("Undo done" if is_done else f"Mark done (+{XP_EVENT} XP)",
+                ft.TextButton(tr("Delete"), icon=ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_300, on_click=do_delete),
+                ft.TextButton(tr("Edit"), icon=ft.Icons.EDIT, on_click=do_edit),
+                ft.Button(tr("Undo done") if is_done else tr("Mark done (+{xp} XP)", xp=XP_EVENT),
                           icon=ft.Icons.UNDO if is_done else ft.Icons.CHECK, on_click=do_toggle),
-                ft.TextButton("Close", on_click=self._close_dialog),
+                ft.TextButton(tr("Close"), on_click=self._close_dialog),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         ))
@@ -806,16 +808,16 @@ class CalendarView(ft.Column):
             title=ft.Text(title, weight=ft.FontWeight.BOLD),
             content=ft.Text(message),
             actions=[
-                ft.TextButton("Cancel", on_click=self._close_dialog),
-                ft.TextButton(f"{verb} this event", on_click=choose("one")),
-                ft.TextButton(f"{verb} this and following", on_click=choose("following")),
-                ft.Button(f"{verb} all events", on_click=choose("all")),
+                ft.TextButton(tr("Cancel"), on_click=self._close_dialog),
+                ft.TextButton(tr("{verb} this event", verb=verb), on_click=choose("one")),
+                ft.TextButton(tr("{verb} this and following", verb=verb), on_click=choose("following")),
+                ft.Button(tr("{verb} all events", verb=verb), on_click=choose("all")),
             ],
         ))
 
     def ask_delete(self, occ):
         if occ["recurrence"] == "none":
-            confirm_action(self.app_page, "Delete event?", f"'{occ['title']}' will be removed.",
+            confirm_action(self.app_page, tr("Delete event?"), tr("'{title}' will be removed.", title=occ["title"]),
                            lambda: (db.delete_calendar_event(occ["id"]), self._changed()))
             return
 
@@ -828,8 +830,8 @@ class CalendarView(ft.Column):
                 db.delete_calendar_event(occ["id"])
             self._changed()
 
-        self._ask_scope("Delete repeating event",
-                        f"'{occ['title']}' repeats. What do you want to delete?", apply, "Delete")
+        self._ask_scope(tr("Delete repeating event"),
+                        tr("'{title}' repeats. What do you want to delete?", title=occ["title"]), apply, tr("Delete"))
 
     # ------------------------------------------------------------ editor
     def open_editor(self, occ=None, day: date = None, hour: int = None):
@@ -849,28 +851,28 @@ class CalendarView(ft.Column):
             "color": occ["color"] if editing else "Cyan",
         }
 
-        title_f = ft.TextField(label="Title", value=occ["title"] if editing else "", autofocus=True, dense=True)
-        date_f = ft.TextField(label="Date (DD/MM/YYYY)", value=f"{base_date:%d/%m/%Y}", dense=True, expand=True)
-        all_day_cb = ft.Checkbox(label="All day", value=occ["all_day"] if editing else False)
+        title_f = ft.TextField(label=tr("Title"), value=occ["title"] if editing else "", autofocus=True, dense=True)
+        date_f = ft.TextField(label=tr("Date (DD/MM/YYYY)"), value=f"{base_date:%d/%m/%Y}", dense=True, expand=True)
+        all_day_cb = ft.Checkbox(label=tr("All day"), value=occ["all_day"] if editing else False)
         time_dd = ft.Dropdown(
-            label="Start", dense=True, width=120, menu_height=320,
+            label=tr("Start"), dense=True, width=120, menu_height=320,
             value=str(start_min),
             options=[ft.DropdownOption(key=str(m), text=fmt_time(m // 60, m % 60)) for m in time_slots(start_min)],
         )
         dur_value = occ["duration_min"] if editing else 60
         dur_opts = list(DURATION_OPTIONS)
         if dur_value not in dict(dur_opts):
-            dur_opts.append((dur_value, f"{dur_value} min"))
+            dur_opts.append((dur_value, f"{dur_value} min"))  # numbers read the same in both languages
             dur_opts.sort()
-        dur_dd = ft.Dropdown(label="Duration", dense=True, width=150, value=str(dur_value),
-                             options=[ft.DropdownOption(key=str(v), text=t) for v, t in dur_opts])
-        rep_dd = ft.Dropdown(label="Repeat", dense=True, expand=True,
+        dur_dd = ft.Dropdown(label=tr("Duration"), dense=True, width=150, value=str(dur_value),
+                             options=[ft.DropdownOption(key=str(v), text=tr(t)) for v, t in dur_opts])
+        rep_dd = ft.Dropdown(label=tr("Repeat"), dense=True, expand=True,
                              value=occ["recurrence"] if editing else "none")
-        until_f = ft.TextField(label="Until (optional)", dense=True, width=170,
+        until_f = ft.TextField(label=tr("Until (optional)"), dense=True, width=170,
                                value=(f"{date.fromisoformat(occ['recurrence_end']):%d/%m/%Y}"
                                       if editing and occ["recurrence_end"] else ""))
-        rem_dd = ft.Dropdown(label="Reminder", dense=True, expand=True)
-        notes_f = ft.TextField(label="Notes", value=occ["notes"] if editing else "", multiline=True,
+        rem_dd = ft.Dropdown(label=tr("Reminder"), dense=True, expand=True)
+        notes_f = ft.TextField(label=tr("Notes"), value=occ["notes"] if editing else "", multiline=True,
                                min_lines=2, max_lines=5, dense=True)
         conflict_txt = ft.Text("", size=12, color=ft.Colors.AMBER_ACCENT)
         error_txt = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
@@ -894,7 +896,7 @@ class CalendarView(ft.Column):
                     occ["reminder_min"] if editing else 15)
                 if current not in dict(opts):
                     current = opts[1][0]
-                rem_dd.options = [ft.DropdownOption(key=str(v), text=t) for v, t in opts]
+                rem_dd.options = [ft.DropdownOption(key=str(v), text=tr(t)) for v, t in opts]
                 rem_dd.value = str(current)
             # conflicts with other timed events that day
             conflict_txt.value = ""
@@ -906,7 +908,8 @@ class CalendarView(ft.Column):
                            and o["start_hour"] * 60 + o["start_minute"] < en
                            and s < o["start_hour"] * 60 + o["start_minute"] + o["duration_min"]]
                 if clashes:
-                    conflict_txt.value = "⚠ Overlaps with: " + ", ".join(clashes[:3]) + ("…" if len(clashes) > 3 else "")
+                    conflict_txt.value = tr("⚠ Overlaps with: {titles}",
+                                            titles=", ".join(clashes[:3]) + ("…" if len(clashes) > 3 else ""))
             render_colors()
             if e is not None:
                 self.app_page.update()
@@ -916,7 +919,7 @@ class CalendarView(ft.Column):
                 ft.Container(
                     width=26, height=26, border_radius=13, bgcolor=c,
                     border=ft.Border.all(3, ft.Colors.WHITE) if state["color"] == name else None,
-                    tooltip=name,
+                    tooltip=tr(name),
                     on_click=lambda e, n=name: (state.update(color=n), refresh_dependent(e)),
                 ) for name, c in EVENT_COLORS.items()
             ]
@@ -944,16 +947,16 @@ class CalendarView(ft.Column):
             title = (title_f.value or "").strip()
             d = parsed_date()
             if not title:
-                return None, "Give the event a title."
+                return None, tr("Give the event a title.")
             if not d:
-                return None, "Invalid date. Use DD/MM/YYYY."
+                return None, tr("Invalid date. Use DD/MM/YYYY.")
             until = ""
             if rep_dd.value != "none" and (until_f.value or "").strip():
                 u = db.parse_flexible_date(until_f.value)
                 if not u:
-                    return None, "Invalid 'Until' date. Use DD/MM/YYYY."
+                    return None, tr("Invalid 'Until' date. Use DD/MM/YYYY.")
                 if u < d:
-                    return None, "'Until' must be on or after the event date."
+                    return None, tr("'Until' must be on or after the event date.")
                 until = u.isoformat()
             start = int(time_dd.value)
             return {
@@ -1001,33 +1004,33 @@ class CalendarView(ft.Column):
                     db.update_calendar_event(occ["id"], **series)
                 self._changed()
 
-            self._ask_scope("Edit repeating event", f"'{occ['title']}' repeats. Apply the changes to:",
-                            apply, "Save")
+            self._ask_scope(tr("Edit repeating event"), tr("'{title}' repeats. Apply the changes to:", title=occ["title"]),
+                            apply, tr("Save"))
 
         title_f.on_submit = save
 
-        actions = [ft.TextButton("Cancel", on_click=self._close_dialog),
-                   ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]
+        actions = [ft.TextButton(tr("Cancel"), on_click=self._close_dialog),
+                   ft.Button(tr("Save"), icon=ft.Icons.CHECK, on_click=save)]
         if editing:
             def delete(e):
                 self._close_dialog()
                 self.ask_delete(occ)
-            actions.insert(0, ft.TextButton("Delete", icon=ft.Icons.DELETE_OUTLINE,
+            actions.insert(0, ft.TextButton(tr("Delete"), icon=ft.Icons.DELETE_OUTLINE,
                                             icon_color=ft.Colors.RED_300, on_click=delete))
 
         self.app_page.show_dialog(ft.AlertDialog(
             modal=True,
-            title=ft.Text("Edit event" if editing else "New event", weight=ft.FontWeight.BOLD),
+            title=ft.Text(tr("Edit event") if editing else tr("New event"), weight=ft.FontWeight.BOLD),
             content=ft.Container(
                 width=520,
                 content=ft.Column([
                     title_f,
-                    ft.Row([date_f, ft.IconButton(ft.Icons.CALENDAR_MONTH, tooltip="Pick a date", on_click=pick_date),
+                    ft.Row([date_f, ft.IconButton(ft.Icons.CALENDAR_MONTH, tooltip=tr("Pick a date"), on_click=pick_date),
                             all_day_cb], spacing=6),
                     ft.Row([time_dd, dur_dd], spacing=10),
                     ft.Row([rep_dd, until_f], spacing=10),
                     rem_dd,
-                    ft.Text("Color", size=12, color=ft.Colors.GREY_400),
+                    ft.Text(tr("Color"), size=12, color=ft.Colors.GREY_400),
                     color_row,
                     notes_f,
                     conflict_txt,

@@ -17,7 +17,7 @@ import ai_weekly
 import analytics as an
 from ui_helpers import update_ui
 import database as db
-from constants import DAY_NAMES
+from i18n import tr, trn, day_short, fmt_short, month_short
 
 SEQ = ["#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"]   # scores 0-2, 2-4, 4-6, 6-8, 8-10
 SERIES_1 = "#3987e5"
@@ -53,16 +53,16 @@ def card(title, subtitle, content, expand=False):
 
 
 def scale_legend(prefix="Score"):
-    items = [ft.Text(prefix, size=11, color=MUTED)]
+    items = [ft.Text(tr(prefix), size=11, color=MUTED)]
     for i, c in enumerate(SEQ):
         items.append(ft.Container(width=14, height=14, bgcolor=c, border_radius=3,
                                   tooltip=f"{i * 2}–{i * 2 + 2}"))
     items += [ft.Text("0 → 10", size=11, color=MUTED), ft.Container(width=10),
               ft.Container(width=14, height=14, bgcolor=EMPTY, border_radius=3,
                            border=ft.Border.all(1, ft.Colors.with_opacity(0.15, ft.Colors.WHITE))),
-              ft.Text("no entry", size=11, color=MUTED), ft.Container(width=10),
+              ft.Text(tr("no entry"), size=11, color=MUTED), ft.Container(width=10),
               ft.Container(width=14, height=14, bgcolor=REST, border_radius=3),
-              ft.Text("rest", size=11, color=MUTED)]
+              ft.Text(tr("rest"), size=11, color=MUTED)]
     return ft.Row(items, spacing=4)
 
 
@@ -97,8 +97,8 @@ class GraphsView(ft.Column):
         self.controls.append(self._kpi_row(key, today))
         self.controls.append(self._summary_card())
         if not has_data:
-            self.controls.append(card("No habit entries in this period", "",
-                                      ft.Text("Mark your habits in the Schedule and the charts will fill in.",
+            self.controls.append(card(tr("No habit entries in this period"), "",
+                                      ft.Text(tr("Mark your habits in the Schedule and the charts will fill in."),
                                               color=INK_2)))
         else:
             self.controls.append(self._trend_card(key, series))
@@ -128,9 +128,9 @@ class GraphsView(ft.Column):
     def _header(self):
         return ft.Container(content=ft.Row([
             ft.Icon(ft.Icons.INSIGHTS, color=ft.Colors.CYAN_ACCENT, size=28),
-            ft.Text("Graphs", size=22, weight=ft.FontWeight.BOLD, expand=True),
+            ft.Text(tr("Graphs"), size=22, weight=ft.FontWeight.BOLD, expand=True),
             ft.SegmentedButton(
-                segments=[ft.Segment(value=k, label=ft.Text(v[0])) for k, v in an.PERIODS.items()],
+                segments=[ft.Segment(value=k, label=ft.Text(tr(v[0]))) for k, v in an.PERIODS.items()],
                 selected=[self.period], show_selected_icon=False,
                 on_change=lambda e: self._set_period(e.control.selected[0]) if e.control.selected else None),
         ]), padding=ft.Padding.only(top=16))
@@ -151,32 +151,36 @@ class GraphsView(ft.Column):
     def _kpi_row(self, key, today):
         k = an.kpis(key, today)
         cur, prev = k["current"], k["previous"]
-        vs = "previous " + an.PERIODS[key][0].lower().replace("last ", "")
+        vs = tr({"7d": "previous 7 days", "30d": "previous 30 days", "12w": "previous 12 weeks",
+                 "1y": "previous 12 months"}[key])
 
         def delta(c, p, fmt, higher_is_good=True):
             if c is None or p is None:
-                return (f"no data for {vs}", None)
+                return (tr("no data for {period}", period=vs), None)
             d = c - p
             if abs(d) < 1e-9:
-                return (f"same as {vs}", None)
+                return (tr("same as {period}", period=vs), None)
             good = (d > 0) == higher_is_good
-            return (f"{fmt(abs(d))} vs {vs}", good)
+            return (tr("{value} vs {period}", value=fmt(abs(d)), period=vs), good)
+
+        def days(v):
+            return trn("{n} day", "{n} days", int(v) if float(v).is_integer() else v)
 
         avg = cur["avg_score"]
         tiles = [
-            self._tile("Average score", f"{avg:.1f} / 10" if avg is not None else "—",
-                       *delta(avg, prev["avg_score"], lambda v: f"{v:.1f}"), hint="Mean of the daily averages"),
-            self._tile("Days logged", f"{cur['days_logged']} / {cur['days_total']}" +
-                       (f" · {cur['rest_days']} rest" if cur.get("rest_days") else ""),
-                       *delta(cur["days_logged"], prev["days_logged"], lambda v: f"{v:g} day{'s' if v != 1 else ''}")),
-            self._tile("XP earned", f"{cur['xp']:+.0f}", *delta(cur["xp"], prev["xp"], lambda v: f"{v:.0f} XP"),
-                       hint="Habits, quests, studies, reviews and events"),
-            self._tile("Best streak", f"{cur['best_streak']} day{'s' if cur['best_streak'] != 1 else ''}",
-                       *delta(cur["best_streak"], prev["best_streak"], lambda v: f"{v:g} day{'s' if v != 1 else ''}"),
-                       hint=f"Consecutive days with an average of {db.passing_score():g} or more"),
-            self._tile("Study time", fmt_minutes(cur["study_minutes"]),
+            self._tile(tr("Average score"), f"{avg:.1f} / 10" if avg is not None else "—",
+                       *delta(avg, prev["avg_score"], lambda v: f"{v:.1f}"), hint=tr("Mean of the daily averages")),
+            self._tile(tr("Days logged"), f"{cur['days_logged']} / {cur['days_total']}" +
+                       (tr(" · {n} rest", n=cur["rest_days"]) if cur.get("rest_days") else ""),
+                       *delta(cur["days_logged"], prev["days_logged"], days)),
+            self._tile(tr("XP earned"), f"{cur['xp']:+.0f}", *delta(cur["xp"], prev["xp"], lambda v: f"{v:.0f} XP"),
+                       hint=tr("Habits, quests, studies, reviews and events")),
+            self._tile(tr("Best streak"), days(cur["best_streak"]),
+                       *delta(cur["best_streak"], prev["best_streak"], days),
+                       hint=tr("Consecutive days with an average of {score} or more", score=f"{db.passing_score():g}")),
+            self._tile(tr("Study time"), fmt_minutes(cur["study_minutes"]),
                        *delta(cur["study_minutes"], prev["study_minutes"], fmt_minutes),
-                       hint="Time logged in study journal entries"),
+                       hint=tr("Time logged in study journal entries")),
         ]
         return ft.Container(content=ft.Row(tiles, spacing=12))
 
@@ -191,24 +195,24 @@ class GraphsView(ft.Column):
     def _summary_card(self):
         text = ai_weekly.cached()
         if not ai_gemini.is_configured():
-            body = ft.Text("Set up your Gemini key (Study → ✨) to get a short summary of each week here.",
+            body = ft.Text(tr("Set up your Gemini key (Options → AI) to get a short summary of each week here."),
                            size=13, color=MUTED)
             action = None
         elif ai_weekly.is_generating():
             body = ft.Row([ft.ProgressRing(width=16, height=16, stroke_width=2),
-                           ft.Text("Gemini is reading your week…", size=13, color=INK_2)], spacing=8)
+                           ft.Text(tr("Gemini is reading your week…"), size=13, color=INK_2)], spacing=8)
             action = None
         elif text:
             body = ft.Text(text, size=14, color=INK, selectable=True)
-            action = ft.IconButton(ft.Icons.REFRESH, icon_size=18, tooltip="Write it again",
+            action = ft.IconButton(ft.Icons.REFRESH, icon_size=18, tooltip=tr("Write it again"),
                                    on_click=lambda e: (ai_weekly.ensure(self._summary_ready, force=True), self.refresh()))
         else:
-            body = ft.Text(self.summary_error or "No summary yet for this week.", size=13,
+            body = ft.Text(self.summary_error or tr("No summary yet for this week."), size=13,
                            color=BAD if self.summary_error else MUTED)
-            action = ft.TextButton("Write this week's summary", icon=ft.Icons.AUTO_AWESOME,
+            action = ft.TextButton(tr("Write this week's summary"), icon=ft.Icons.AUTO_AWESOME,
                                    on_click=lambda e: (ai_weekly.ensure(self._summary_ready, force=True), self.refresh()))
         head = ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=ft.Colors.AMBER_ACCENT, size=18),
-                       ft.Text("This week", size=16, weight=ft.FontWeight.BOLD, color=INK, expand=True)] +
+                       ft.Text(tr("This week"), size=16, weight=ft.FontWeight.BOLD, color=INK, expand=True)] +
                       ([action] if action else []))
         return ft.Container(content=ft.Column([head, body], spacing=8), bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
                             border_radius=10, padding=16)
@@ -235,10 +239,10 @@ class GraphsView(ft.Column):
             interactive=True, expand=True)
         values = [v for _, _, v in series if v is not None]
         latest = values[-1]
-        unit = "week" if an.uses_weeks(key) else "day"
-        sub = (f"Average per {unit} • latest {latest:.1f} • period average {sum(values) / len(values):.1f} • "
-               f"dashed line = goal {target:g}")
-        return card("Daily score trend", sub, ft.Container(content=chart, height=230))
+        per = tr("Average per week") if an.uses_weeks(key) else tr("Average per day")
+        sub = per + tr(" • latest {latest} • period average {avg} • dashed line = goal {goal}",
+                       latest=f"{latest:.1f}", avg=f"{sum(values) / len(values):.1f}", goal=f"{target:g}")
+        return card(tr("Daily score trend"), sub, ft.Container(content=chart, height=230))
 
     # ------------------------------------------------------------ mood (from the Diary)
     def _mood_card(self, key, today):
@@ -251,7 +255,8 @@ class GraphsView(ft.Column):
         if not values:
             return None
         n = len(series)
-        points = [fch.LineChartDataPoint(i, round(v, 2), tooltip=f"{label}: mood {v:.1f}")
+        points = [fch.LineChartDataPoint(i, round(v, 2), tooltip=tr("{label}: mood {value}", label=label,
+                                                                     value=f"{v:.1f}"))
                   for i, (label, _, v) in enumerate(series) if v is not None]
         line = fch.LineChartData(points=points, color=SERIES_1, stroke_width=2, curved=False,
                                  rounded_stroke_cap=True, point=True)
@@ -268,14 +273,17 @@ class GraphsView(ft.Column):
         good, other = an.mood_vs_habits(key, today)
         goal = db.passing_score()
         tiles = ft.Row([
-            self._tile(f"Mood on days ≥ {goal:g}", f"{good[0]:.1f}" if good else "—",
-                       f"{good[1]} day{'s' if good and good[1] != 1 else ''}" if good else "no such days yet"),
-            self._tile("Mood on other days", f"{other[0]:.1f}" if other else "—",
-                       f"{other[1]} day{'s' if other and other[1] != 1 else ''}" if other else "no such days yet"),
+            self._tile(tr("Mood on days ≥ {score}", score=f"{goal:g}"), f"{good[0]:.1f}" if good else "—",
+                       trn("{n} day", "{n} days", good[1]) if good else tr("no such days yet")),
+            self._tile(tr("Mood on other days"), f"{other[0]:.1f}" if other else "—",
+                       trn("{n} day", "{n} days", other[1]) if other else tr("no such days yet")),
         ], spacing=14)
-        unit = "week" if an.uses_weeks(key) else "day"
-        sub = f"From the Diary • average per {unit} • {len(values)} {unit}{'s' if len(values) != 1 else ''} with a mood"
-        return card("Mood", sub, ft.Column([ft.Container(content=chart, height=200), tiles], spacing=12))
+        if an.uses_weeks(key):
+            sub = trn("From the Diary • average per week • {n} week with a mood",
+                      "From the Diary • average per week • {n} weeks with a mood", len(values))
+        else:
+            sub = trn("From the Diary • {n} day with a mood", "From the Diary • {n} days with a mood", len(values))
+        return card(tr("Mood"), sub, ft.Column([ft.Container(content=chart, height=200), tiles], spacing=12))
 
     # ------------------------------------------------------------ habit heatmap
     def _heatmap_card(self, key, today):
@@ -293,16 +301,18 @@ class GraphsView(ft.Column):
             cells = [ft.Container(content=ft.Text(name, size=12, color=INK_2, no_wrap=True,
                                                   overflow=ft.TextOverflow.ELLIPSIS), width=170)]
             for (label, first, last), v, st, rested in zip(columns, values, statuses, rests):
-                when = f"{first:%a %d/%m}" if first == last else f"week of {first:%d/%m}"
-                tip = f"{name} • {when}: " + (f"{st} ({v:.1f})" if v is not None else
-                                              ("rest day" if rested == 1 else f"{rested} rest days") if rested
-                                              else "no entry")
+                when = fmt_short(first, year=False) if first == last else tr("week of {date}",
+                                                                              date=f"{first:%d/%m}")
+                tip = f"{name} • {when}: " + (f"{tr(st)} ({v:.1f})" if v is not None else
+                                              trn("{n} rest day", "{n} rest days", rested) if rested
+                                              else tr("no entry"))
                 color = seq_color(v) if v is not None else (REST if rested else EMPTY)
                 cells.append(ft.Container(width=cell, height=min(cell, 26), bgcolor=color, border_radius=3,
                                           tooltip=tip))
             grid.append(ft.Row(cells, spacing=gap))
-        unit = "week (average)" if an.uses_weeks(key) else "day"
-        return card("Habit heatmap", f"One cell per habit per {unit}. Vices count as resisted = 10.",
+        sub = tr("One cell per habit per week (average). Vices count as resisted = 10.") if an.uses_weeks(key) \
+            else tr("One cell per habit per day. Vices count as resisted = 10.")
+        return card(tr("Habit heatmap"), sub,
                     ft.Column([ft.Row([ft.Column(grid, spacing=gap)], scroll=ft.ScrollMode.AUTO),
                                scale_legend()], spacing=10))
 
@@ -313,38 +323,42 @@ class GraphsView(ft.Column):
         rows = []
         for name, neg, avg, days, total, rested in ranking:
             rows.append(ft.Row([
-                ft.Text(name + (" (vice)" if neg else ""), size=12, color=INK_2, width=150, no_wrap=True,
+                ft.Text(name + (tr(" (vice)") if neg else ""), size=12, color=INK_2, width=150, no_wrap=True,
                         overflow=ft.TextOverflow.ELLIPSIS),
                 ft.Container(content=ft.Container(width=max(3, width * avg / 10), height=12, bgcolor=SERIES_1,
                                                   border_radius=ft.BorderRadius.only(top_right=4, bottom_right=4)),
                              width=width, bgcolor=EMPTY, border_radius=4, alignment=ft.Alignment.CENTER_LEFT,
-                             tooltip=f"{name}: average {avg:.1f} on {days} of {total} days" +
-                                     (f" ({rested} rest)" if rested else "")),
+                             tooltip=tr("{name}: average {avg} on {days} of {total} days", name=name,
+                                        avg=f"{avg:.1f}", days=days, total=total) +
+                                     (tr(" ({n} rest)", n=rested) if rested else "")),
                 ft.Text(f"{avg:.1f}", size=12, color=INK, weight=ft.FontWeight.W_600, width=32),
-                ft.Text(f"{days}/{total} days" + (f" • {rested} rest" if rested else ""), size=11, color=MUTED),
+                ft.Text(tr("{days}/{total} days", days=days, total=total) +
+                        (tr(" • {n} rest", n=rested) if rested else ""), size=11, color=MUTED),
             ], spacing=8))
-        sub = "Average score, strongest first; the bottom ones are where a little attention pays off most."
-        return card("Habit ranking", sub, ft.Column(rows, spacing=8), expand=True)
+        sub = tr("Average score, strongest first; the bottom ones are where a little attention pays off most.")
+        return card(tr("Habit ranking"), sub, ft.Column(rows, spacing=8), expand=True)
 
     def _weekday_card(self, key, today):
         pattern = an.weekday_pattern(key, today)
         groups = [fch.BarChartGroup(x=i, rods=[fch.BarChartRod(
             from_y=0, to_y=round(avg or 0, 2), width=BAR_W, color=SERIES_1 if avg is not None else EMPTY,
             border_radius=ft.BorderRadius.only(top_left=4, top_right=4),
-            tooltip=f"{day}: {avg:.1f} ({n} days)" if avg is not None else f"{day}: no entries")])
+            tooltip=tr("{day}: {avg} ({n} days)", day=day, avg=f"{avg:.1f}", n=n) if avg is not None
+            else tr("{day}: no entries", day=day))])
             for i, (day, avg, n) in enumerate(pattern)]
         chart = fch.BarChart(groups=groups, min_y=0, max_y=10, interactive=True, expand=True,
                              left_axis=fch.ChartAxis(labels=axis_labels(range(0, 11, 2)), label_size=28),
-                             bottom_axis=fch.ChartAxis(labels=axis_labels(range(7), lambda i: DAY_NAMES[i]),
+                             bottom_axis=fch.ChartAxis(labels=axis_labels(range(7), day_short),
                                                        label_size=22),
                              horizontal_grid_lines=fch.ChartGridLines(interval=2, color=GRID, width=1))
         scored = [(d, a) for d, a, _ in pattern if a is not None]
-        sub = "Average daily score per weekday"
+        sub = tr("Average daily score per weekday")
         if len(scored) >= 2:
             best = max(scored, key=lambda x: x[1])
             worst = min(scored, key=lambda x: x[1])
-            sub += f" • strongest {best[0]} ({best[1]:.1f}) • lightest {worst[0]} ({worst[1]:.1f})"
-        return card("Weekday pattern", sub, ft.Container(content=chart, height=220), expand=True)
+            sub += tr(" • strongest {best} ({best_avg}) • lightest {worst} ({worst_avg})", best=best[0],
+                      best_avg=f"{best[1]:.1f}", worst=worst[0], worst_avg=f"{worst[1]:.1f}")
+        return card(tr("Weekday pattern"), sub, ft.Container(content=chart, height=220), expand=True)
 
     # ------------------------------------------------------------ year map
     def _year_card(self, today):
@@ -358,7 +372,7 @@ class GraphsView(ft.Column):
             if skip:
                 skip -= 1
             elif m != last_month and i <= len(weeks) - 3:
-                month_row.append(ft.Container(content=ft.Text(wk[0][0].strftime("%b"), size=9, color=MUTED,
+                month_row.append(ft.Container(content=ft.Text(month_short(wk[0][0].month), size=9, color=MUTED,
                                                               no_wrap=True), width=size * 3 + gap * 2))
                 skip = 2
             else:
@@ -366,19 +380,20 @@ class GraphsView(ft.Column):
             last_month = m
         day_rows = []
         for di in range(7):
-            cells = [ft.Container(content=ft.Text(DAY_NAMES[di] if di in (0, 2, 4) else "", size=9, color=MUTED),
+            cells = [ft.Container(content=ft.Text(day_short(di) if di in (0, 2, 4) else "", size=9, color=MUTED),
                                   width=30)]
             for wk in weeks:
                 d, v, future, rest_only = wk[di]
                 cells.append(ft.Container(width=size, height=size, border_radius=2,
                                           bgcolor=ft.Colors.TRANSPARENT if future else (
                                               REST if rest_only else seq_color(v)),
-                                          tooltip=None if future else (f"{d:%a %d/%m/%Y}: rest day" if rest_only
-                                                                       else f"{d:%a %d/%m/%Y}: {v:.1f}" if v is not None
-                                                                       else f"{d:%a %d/%m/%Y}: no entries")))
+                                          tooltip=None if future else (
+                                              tr("{date}: rest day", date=fmt_short(d)) if rest_only
+                                              else f"{fmt_short(d)}: {v:.1f}" if v is not None
+                                              else tr("{date}: no entries", date=fmt_short(d)))))
             day_rows.append(ft.Row(cells, spacing=gap))
         logged = sum(1 for wk in weeks for d, v, f, r in wk if v is not None or r)
-        return card("Year map", f"Last 12 months, one square per day • {logged} days logged",
+        return card(tr("Year map"), tr("Last 12 months, one square per day • {n} days logged", n=logged),
                     ft.Column([ft.Row([ft.Column([ft.Row(month_row, spacing=gap), *day_rows], spacing=gap)],
                                       scroll=ft.ScrollMode.AUTO), scale_legend("Daily score")], spacing=10))
 
@@ -396,7 +411,7 @@ class GraphsView(ft.Column):
                 color=SERIES_1 if v >= 0 else NEGATIVE,
                 border_radius=ft.BorderRadius.only(top_left=4, top_right=4) if v >= 0 else
                 ft.BorderRadius.only(bottom_left=4, bottom_right=4),
-                tooltip=f"Week of {w['label']}: {v:+.0f} XP")]))
+                tooltip=tr("Week of {date}: {xp} XP", date=w["label"], xp=f"{v:+.0f}"))]))
         lstep = max(1, math.ceil(len(weeks) / 10))
         chart = fch.BarChart(groups=groups, min_y=y_min, max_y=y_max, interactive=True, expand=True,
                              left_axis=fch.ChartAxis(labels=axis_labels(range(int(y_min), int(y_max) + 1, int(step)),
@@ -406,11 +421,11 @@ class GraphsView(ft.Column):
                                  for i, w in enumerate(weeks) if i % lstep == 0], label_size=22),
                              horizontal_grid_lines=fch.ChartGridLines(interval=step, color=GRID, width=1))
         legend = ft.Row([ft.Container(width=12, height=12, bgcolor=SERIES_1, border_radius=2),
-                         ft.Text("XP gained", size=11, color=INK_2), ft.Container(width=8),
+                         ft.Text(tr("XP gained"), size=11, color=INK_2), ft.Container(width=8),
                          ft.Container(width=12, height=12, bgcolor=NEGATIVE, border_radius=2),
-                         ft.Text("net loss (low habit days)", size=11, color=INK_2)], spacing=4)
+                         ft.Text(tr("net loss (low habit days)"), size=11, color=INK_2)], spacing=4)
         total = sum(values)
-        return card("XP per week", f"Net XP from every source • {total:+.0f} XP in these weeks",
+        return card(tr("XP per week"), tr("Net XP from every source • {xp} XP in these weeks", xp=f"{total:+.0f}"),
                     ft.Column([ft.Container(content=chart, height=220), legend], spacing=8))
 
     # ------------------------------------------------------------ studies & quests
@@ -428,7 +443,8 @@ class GraphsView(ft.Column):
             groups=[fch.BarChartGroup(x=i, rods=[fch.BarChartRod(
                 from_y=0, to_y=round(h, 2), width=10 if narrow else BAR_W, color=SERIES_1,
                 border_radius=ft.BorderRadius.only(top_left=4, top_right=4),
-                tooltip=f"Week of {w['label']}: {fmt_minutes(w['study_minutes'])}")]) for i, (w, h) in
+                tooltip=tr("Week of {date}: {value}", date=w["label"], value=fmt_minutes(w["study_minutes"])))])
+                for i, (w, h) in
                 enumerate(zip(weeks, hours))],
             min_y=0, max_y=h_top, interactive=True, expand=True, bottom_axis=bottom,
             left_axis=fch.ChartAxis(labels=axis_labels(_frange(0, h_top, h_step), lambda v: f"{v:g}h"), label_size=34),
@@ -441,25 +457,26 @@ class GraphsView(ft.Column):
             groups=[fch.BarChartGroup(x=i, spacing=2, rods=[
                 fch.BarChartRod(from_y=0, to_y=w["reviews"], width=5 if narrow else 10, color=SERIES_1,
                                 border_radius=ft.BorderRadius.only(top_left=3, top_right=3),
-                                tooltip=f"Week of {w['label']}: {w['reviews']} review(s)"),
+                                tooltip=tr("Week of {date}: {n} review(s)", date=w["label"], n=w["reviews"])),
                 fch.BarChartRod(from_y=0, to_y=w["quests"], width=5 if narrow else 10, color=SERIES_2,
                                 border_radius=ft.BorderRadius.only(top_left=3, top_right=3),
-                                tooltip=f"Week of {w['label']}: {w['quests']} quest(s)")])
+                                tooltip=tr("Week of {date}: {n} quest(s)", date=w["label"], n=w["quests"]))])
                 for i, w in enumerate(weeks)],
             min_y=0, max_y=c_top, interactive=True, expand=True, bottom_axis=bottom,
             left_axis=fch.ChartAxis(labels=axis_labels(range(0, int(c_top) + 1, int(c_step))), label_size=28),
             horizontal_grid_lines=fch.ChartGridLines(interval=c_step, color=GRID, width=1))
         legend = ft.Row([ft.Container(width=12, height=12, bgcolor=SERIES_1, border_radius=2),
-                         ft.Text("Study reviews done", size=11, color=INK_2), ft.Container(width=8),
+                         ft.Text(tr("Study reviews done"), size=11, color=INK_2), ft.Container(width=8),
                          ft.Container(width=12, height=12, bgcolor=SERIES_2, border_radius=2),
-                         ft.Text("Quests completed", size=11, color=INK_2)], spacing=4)
+                         ft.Text(tr("Quests completed"), size=11, color=INK_2)], spacing=4)
         total_h = sum(w["study_minutes"] for w in weeks)
         total_r = sum(w["reviews"] for w in weeks)
         total_q = sum(w["quests"] for w in weeks)
         return ft.Container(content=ft.Row([
-            card("Study time per week", f"{fmt_minutes(total_h)} logged in your study journal",
+            card(tr("Study time per week"), tr("{time} logged in your study journal", time=fmt_minutes(total_h)),
                  ft.Container(content=study, height=200), expand=True),
-            card("Reviews & quests per week", f"{total_r} review(s) • {total_q} quest(s) completed",
+            card(tr("Reviews & quests per week"),
+                 tr("{reviews} review(s) • {quests} quest(s) completed", reviews=total_r, quests=total_q),
                  ft.Column([ft.Container(content=counts, height=200), legend], spacing=8), expand=True),
         ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.START))
 

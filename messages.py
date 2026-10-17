@@ -1,5 +1,5 @@
 """Fixed texts for the assistant's messages in Portuguese and English (no AI quota needed for these)."""
-import ai_insight
+import i18n
 
 TEXTS = {
     "pt": {
@@ -8,7 +8,7 @@ TEXTS = {
         "help": "Exemplos: \"como está meu dia?\", \"marca academia como ok\", \"descanso no alongamento hoje\", "
                 "\"cria dentista sexta 14h30\", \"estudei docker 40 minutos: volumes\", \"o que vence este mês?\", \"anota no diário: hoje alonguei como nunca\". "
                 "Também entendo áudios. Eu nunca apago nada.",
-        "no_ai": "Para conversar eu preciso da chave do Gemini (no app: Study → ✨ ou Options).",
+        "no_ai": "Para conversar eu preciso da chave do Gemini (no app: Opções → IA).",
         "ai_error": "Não consegui pensar agora ({error}). Tente de novo em instantes.",
         "checkin_title": "🌙 Check-in: ainda falta marcar {n} hábito(s) de hoje. Toque para responder:",
         "checkin_done": "✅ Tudo marcado hoje! Nota do dia: {score}.",
@@ -21,7 +21,7 @@ TEXTS = {
         "event_allday_tomorrow": "amanhã (o dia todo)",
         "doc_window": "📄 {title} vence em {date} — já dá para planejar a renovação.",
         "doc_week": "📄 {title} vence em {days} dias ({date}).",
-        "doc_due": "📄 {title} venceu/vence hoje ({date}). Renove quando puder e marque \"Renewed\" no app.",
+        "doc_due": "📄 {title} venceu/vence hoje ({date}). Renove quando puder e aperte \"Renovei\" no app.",
         "reviews": "📚 {n} revisão(ões) de estudo para hoje: {topics}. Leva poucos minutos!",
         "level_up": "⬆️ Subiu para o nível {level} — {rank}! Mandou bem.",
         "streak": "🔥 {n} dias seguidos! Continue no seu ritmo.",
@@ -37,7 +37,7 @@ TEXTS = {
         "help": "Examples: \"how's my day?\", \"mark gym as ok\", \"rest day for stretching today\", "
                 "\"add dentist friday 2:30pm\", \"I studied docker 40 minutes: volumes\", \"what expires this month?\", \"write in my diary: best stretching ever\". "
                 "I understand voice messages too. I never delete anything.",
-        "no_ai": "To chat I need the Gemini key (in the app: Study → ✨ or Options).",
+        "no_ai": "To chat I need the Gemini key (in the app: Options → AI).",
         "ai_error": "I couldn't think right now ({error}). Try again in a moment.",
         "checkin_title": "🌙 Check-in: {n} habit(s) still unmarked today. Tap to answer:",
         "checkin_done": "✅ All marked for today! Daily score: {score}.",
@@ -64,7 +64,7 @@ TEXTS = {
 
 
 def lang() -> str:
-    return "en" if ai_insight.language() == "English" else "pt"
+    return i18n.language()
 
 
 def t(key: str, **kw) -> str:

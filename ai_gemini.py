@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 
 log = logging.getLogger("gamification")
 
+from i18n import tr  # noqa: E402
+
 KEYRING_SERVICE = "DailyPersonalGamification"
 KEYRING_ACCOUNT = "gemini-api-key"
 TIMEOUT_SECONDS = 90
@@ -74,10 +76,10 @@ def is_configured() -> bool:
 
 def status_text() -> str:
     if not AVAILABLE:
-        return "The google-genai package is not installed (pip install -r requirements.txt)."
+        return tr("The google-genai package is not installed (pip install -r requirements.txt).")
     if not get_api_key():
-        return "No Gemini API key saved yet."
-    return "Gemini is configured."
+        return tr("No Gemini API key saved yet.")
+    return tr("Gemini is configured.")
 
 
 # ------------------------------------------------------------------ models
@@ -192,7 +194,7 @@ def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_out
         raise AIError(status_text())
     key = get_api_key()
     if not key:
-        raise AINotConfigured("Set up your Gemini API key first (Study tab → AI settings).")
+        raise AINotConfigured(tr("Set up your Gemini API key first (Options → AI)."))
 
     config = types.GenerateContentConfig(
         system_instruction=system,
@@ -210,10 +212,10 @@ def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_out
             models = model_order(client)
         except Exception as exc:
             if _is_bad_key(exc):
-                raise AIError("Gemini rejected the API key. Check it in AI settings.") from exc
-            raise AIError(f"Could not reach Gemini: {exc}") from exc
+                raise AIError(tr("Gemini rejected the API key. Check it in AI settings.")) from exc
+            raise AIError(tr("Could not reach Gemini: {error}", error=exc)) from exc
         if not models:
-            raise AIError("No Gemini text models are available for this API key.")
+            raise AIError(tr("No Gemini text models are available for this API key."))
 
         rate_limited, last_error = 0, None
         for model in models:
@@ -240,7 +242,7 @@ def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_out
                 return schema.model_validate_json(text), model
             except Exception as exc:
                 if _is_bad_key(exc):
-                    raise AIError("Gemini rejected the API key. Check it in AI settings.") from exc
+                    raise AIError(tr("Gemini rejected the API key. Check it in AI settings.")) from exc
                 if _is_rate_limit(exc):
                     rate_limited += 1
                     log.warning("Gemini rate limit on %s, trying the next model", model)
@@ -248,8 +250,8 @@ def generate(prompt, system: str, schema=None, temperature: float = 0.4, max_out
                     log.warning("Gemini model %s failed: %s", model, exc)
                 last_error = exc
         if rate_limited == len(models):
-            raise AIError("Gemini free-tier quota reached for now. It will retry later.")
-        raise AIError(f"All Gemini models failed ({last_error}).")
+            raise AIError(tr("Gemini free-tier quota reached for now. It will retry later."))
+        raise AIError(tr("All Gemini models failed ({error}).", error=last_error))
 
 
 def test_connection(key: str = None):
@@ -258,14 +260,14 @@ def test_connection(key: str = None):
         return False, status_text()
     key = (key or "").strip() or get_api_key()
     if not key:
-        return False, "Type or save an API key first."
+        return False, tr("Type or save an API key first.")
     try:
         models = _list_models(_client(key))
     except Exception as exc:
         if _is_bad_key(exc):
-            return False, "Gemini rejected this API key."
-        return False, f"Could not reach Gemini: {exc}"
+            return False, tr("Gemini rejected this API key.")
+        return False, tr("Could not reach Gemini: {error}", error=exc)
     if not models:
-        return False, "The key works, but no text models are available for it."
+        return False, tr("The key works, but no text models are available for it.")
     best = models[0].removeprefix("models/")
-    return True, f"Connected — {len(models)} usable models (will use {best} first)."
+    return True, tr("Connected — {n} usable models (will use {model} first).", n=len(models), model=best)

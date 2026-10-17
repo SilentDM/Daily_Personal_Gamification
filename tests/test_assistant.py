@@ -10,6 +10,7 @@ import ai_gemini  # noqa: E402
 import assistant as assistant_mod  # noqa: E402
 import assistant_tools as tools  # noqa: E402
 import database as db  # noqa: E402
+import i18n  # noqa: E402
 import notifier as notifier_mod  # noqa: E402
 import settings  # noqa: E402
 
@@ -58,6 +59,7 @@ def text_update(text, chat=CHAT, age=0):
 class AssistantTestCase(DbTestCase):
     def setUp(self):
         super().setUp()
+        i18n.set_language("pt")  # the assistant's fixed messages are checked in Portuguese here
         self.replies = []
         self.calls = []
 
@@ -254,8 +256,8 @@ class CheckinTests(AssistantTestCase):
         text, rows = assistant_mod.checkin_keyboard()
         self.assertIn("2", text)
         answers = [b["text"] for b in rows[1]]
-        self.assertIn("Rest", answers)
-        self.assertNotIn("Rest", [b["text"] for b in rows[3]])  # vices can't rest
+        self.assertIn("Descanso", answers)  # translated button (Portuguese in these tests)
+        self.assertNotIn("Descanso", [b["text"] for b in rows[3]])  # vices can't rest
 
     def test_button_press_marks_and_updates_the_message(self):
         self.a.send_checkin()

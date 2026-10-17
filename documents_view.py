@@ -9,6 +9,7 @@ import flet as ft
 
 import database as db
 from ui_helpers import confirm_action, update_ui
+from i18n import tr, trn
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
 CATEGORY_ICONS = {
@@ -60,24 +61,24 @@ def status_text(doc) -> str:
     days = doc["days_left"]
     exp = date.fromisoformat(doc["expiration_date"])
     if doc["status"] == "expired":
-        return f"Expired {abs(days)} day{'s' if abs(days) != 1 else ''} ago"
+        return trn("Expired {n} day ago", "Expired {n} days ago", abs(days))
     if days == 0:
-        return "Expires today"
+        return tr("Expires today")
     if doc["status"] == "soon":
-        return f"Expires in {days} day{'s' if days != 1 else ''}"
-    return f"Valid until {exp:%d/%m/%Y}"
+        return trn("Expires in {n} day", "Expires in {n} days", days)
+    return tr("Valid until {date}", date=f"{exp:%d/%m/%Y}")
 
 
 def type_options():
-    return [ft.DropdownOption(key=t, text=f"{cat} · {t}") for cat, types in db.DOC_TYPES.items() for t, _, _ in types]
+    return [ft.DropdownOption(key=t, text=f"{tr(cat)} · {t}") for cat, types in db.DOC_TYPES.items() for t, _, _ in types]
 
 
 def warn_label(days: int) -> str:
     if days % 365 == 0 and days:
-        return f"{days // 365} year{'s' if days > 365 else ''} before"
+        return trn("{n} year before", "{n} years before", days // 365)
     if days >= 60 and days % 30 == 0:
-        return f"{days // 30} months before"
-    return f"{days} days before"
+        return tr("{n} months before", n=days // 30)
+    return tr("{n} days before", n=days)
 
 
 class _Lock:
@@ -99,12 +100,12 @@ class _Lock:
 LOCK = _Lock()
 
 
-def ask_pin(page: ft.Page, on_ok, title="Unlock documents"):
+def ask_pin(page: ft.Page, on_ok, title=None):
     """Asks for the PIN (if one is set) and calls on_ok() when it matches."""
     if LOCK.unlocked():
         on_ok()
         return
-    pin_f = ft.TextField(label="PIN", password=True, can_reveal_password=True, autofocus=True, dense=True,
+    pin_f = ft.TextField(label=tr("PIN"), password=True, can_reveal_password=True, autofocus=True, dense=True,
                          keyboard_type=ft.KeyboardType.NUMBER)
     error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
@@ -114,24 +115,25 @@ def ask_pin(page: ft.Page, on_ok, title="Unlock documents"):
             page.pop_dialog()
             on_ok()
         else:
-            error.value = "Wrong PIN."
+            error.value = tr("Wrong PIN.")
             pin_f.value = ""
             page.update()
 
     pin_f.on_submit = submit
     page.show_dialog(ft.AlertDialog(
-        modal=True, title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE), ft.Text(title, weight=ft.FontWeight.BOLD)]),
+        modal=True, title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE),
+                                      ft.Text(title or tr("Unlock documents"), weight=ft.FontWeight.BOLD)]),
         content=ft.Container(width=320, content=ft.Column(
-            [ft.Text(f"Numbers and notes stay visible for {UNLOCK_MINUTES} minutes.", size=12,
+            [ft.Text(tr("Numbers and notes stay visible for {n} minutes.", n=UNLOCK_MINUTES), size=12,
                      color=ft.Colors.GREY_400), pin_f, error], spacing=10, tight=True)),
-        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                 ft.Button("Unlock", icon=ft.Icons.LOCK_OPEN, on_click=submit)]))
+        actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: page.pop_dialog()),
+                 ft.Button(tr("Unlock"), icon=ft.Icons.LOCK_OPEN, on_click=submit)]))
 
 
 def open_renew_dialog(page: ft.Page, doc: dict, on_done=None):
     """'Renewed': records the new expiration date (and completes the renewal quest, if any)."""
     suggested = db.suggested_renewal_date(doc)
-    date_f = ft.TextField(label="New expiration date (DD/MM/YYYY)", value=f"{suggested:%d/%m/%Y}", dense=True,
+    date_f = ft.TextField(label=tr("New expiration date (DD/MM/YYYY)"), value=f"{suggested:%d/%m/%Y}", dense=True,
                           autofocus=True)
     error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
     old = date.fromisoformat(doc["expiration_date"])
@@ -149,11 +151,11 @@ def open_renew_dialog(page: ft.Page, doc: dict, on_done=None):
     def save(e=None):
         new = db.parse_flexible_date(date_f.value or "")
         if not new:
-            error.value = "Use DD/MM/YYYY."
+            error.value = tr("Use DD/MM/YYYY.")
             page.update()
             return
         if new <= date.today():
-            error.value = "The new expiration date should be in the future."
+            error.value = tr("The new expiration date should be in the future.")
             page.update()
             return
         xp = db.renew_doc(doc["id"], new.isoformat())
@@ -166,19 +168,20 @@ def open_renew_dialog(page: ft.Page, doc: dict, on_done=None):
     page.show_dialog(ft.AlertDialog(
         modal=True,
         title=ft.Row([ft.Icon(ft.Icons.AUTORENEW, color=ft.Colors.GREEN_ACCENT),
-                      ft.Text(f"Renewed: {doc['title']}", weight=ft.FontWeight.BOLD, expand=True)]),
+                      ft.Text(tr("Renewed: {title}", title=doc["title"]), weight=ft.FontWeight.BOLD, expand=True)]),
         content=ft.Container(width=420, content=ft.Column([
-            ft.Text(f"Previous expiration: {old:%d/%m/%Y}" + (" • renews every year" if doc["annual"] else ""),
+            ft.Text(tr("Previous expiration: {date}", date=f"{old:%d/%m/%Y}") +
+                    (tr(" • renews every year") if doc["annual"] else ""),
                     size=12, color=ft.Colors.GREY_400),
             date_f,
-            ft.Row([ft.OutlinedButton(f"+{n} year{'s' if n > 1 else ''}", on_click=plus_years(n)) for n in (1, 5, 10)],
+            ft.Row([ft.OutlinedButton(trn("+{n} year", "+{n} years", n), on_click=plus_years(n)) for n in (1, 5, 10)],
                    spacing=6),
-            ft.Text("If a renewal quest is open for it, it will be completed (+XP).", size=11,
+            ft.Text(tr("If a renewal quest is open for it, it will be completed (+XP)."), size=11,
                     color=ft.Colors.GREY_500),
             error,
         ], spacing=10, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                 ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]))
+        actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: page.pop_dialog()),
+                 ft.Button(tr("Save"), icon=ft.Icons.CHECK, on_click=save)]))
 
 
 def open_doc_summary(page: ft.Page, doc: dict, on_done=None):
@@ -196,12 +199,13 @@ def open_doc_summary(page: ft.Page, doc: dict, on_done=None):
         content=ft.Container(width=400, content=ft.Column([
             ft.Row([ft.Icon(icon, color=color, size=18), ft.Text(status_text(doc), color=color,
                                                                  weight=ft.FontWeight.BOLD)]),
-            ft.Text(f"{doc['doc_type']} • expires {exp:%d/%m/%Y}" + (" • yearly" if doc["annual"] else ""), size=13),
-            ft.Text(f"Reminder starts {date.fromisoformat(doc['warn_start']):%d/%m/%Y} "
-                    f"({warn_label(doc['warn_days'])})", size=12, color=ft.Colors.GREY_400),
+            ft.Text(tr("{type} • expires {date}", type=doc["doc_type"], date=f"{exp:%d/%m/%Y}") +
+                    (tr(" • yearly") if doc["annual"] else ""), size=13),
+            ft.Text(tr("Reminder starts {date} ({lead})", date=f"{date.fromisoformat(doc['warn_start']):%d/%m/%Y}",
+                       lead=warn_label(doc["warn_days"])), size=12, color=ft.Colors.GREY_400),
         ], spacing=8, tight=True)),
-        actions=[ft.TextButton("Close", on_click=lambda e: page.pop_dialog()),
-                 ft.Button("Renewed", icon=ft.Icons.AUTORENEW, on_click=renew)]))
+        actions=[ft.TextButton(tr("Close"), on_click=lambda e: page.pop_dialog()),
+                 ft.Button(tr("Renewed"), icon=ft.Icons.AUTORENEW, on_click=renew)]))
 
 
 # ---------------------------------------------------------------- view
@@ -226,7 +230,8 @@ class DocumentsView(ft.Column):
     def render(self):
         created = db.sync_renewal_quests()
         if created and not self.feedback:
-            self.feedback = f"{len(created)} renewal quest{'s' if len(created) != 1 else ''} added to your Quest Log."
+            self.feedback = trn("{n} renewal quest added to your Quest Log.",
+                                "{n} renewal quests added to your Quest Log.", len(created))
         docs = db.get_tracked_docs()
         attention = [d for d in docs if d["status"] != "ok"]
         good = [d for d in docs if d["status"] == "ok"]
@@ -241,14 +246,14 @@ class DocumentsView(ft.Column):
         if not docs:
             controls.append(ft.Container(content=ft.Column([
                 ft.Icon(ft.Icons.FOLDER_OPEN_OUTLINED, size=48, color=ft.Colors.GREY_600),
-                ft.Text("Track what expires: CNH, passport, IPVA, insurance…", color=ft.Colors.GREY_400),
-                ft.Text("Only a name, type and expiration date are needed.", size=12, color=ft.Colors.GREY_500),
+                ft.Text(tr("Track what expires: CNH, passport, IPVA, insurance…"), color=ft.Colors.GREY_400),
+                ft.Text(tr("Only a name, type and expiration date are needed."), size=12, color=ft.Colors.GREY_500),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8), alignment=ft.Alignment.CENTER,
                 padding=40))
         if attention:
-            controls.append(self._group("NEEDS ATTENTION", attention, ft.Colors.AMBER_ACCENT))
+            controls.append(self._group(tr("NEEDS ATTENTION"), attention, ft.Colors.AMBER_ACCENT))
         if good:
-            controls.append(self._group("ALL GOOD", good, ft.Colors.GREEN_ACCENT))
+            controls.append(self._group(tr("ALL GOOD"), good, ft.Colors.GREEN_ACCENT))
         self.controls = controls
         self._update()
 
@@ -257,14 +262,14 @@ class DocumentsView(ft.Column):
         lock_btn = ft.IconButton(
             ft.Icons.LOCK_OPEN if LOCK.unlocked() else ft.Icons.LOCK_OUTLINE,
             icon_color=ft.Colors.GREEN_ACCENT if LOCK.unlocked() else ft.Colors.AMBER_ACCENT,
-            tooltip=("Lock now" if LOCK.unlocked() else "Unlock numbers & notes") if pin else "No PIN set",
+            tooltip=(tr("Lock now") if LOCK.unlocked() else tr("Unlock numbers & notes")) if pin else tr("No PIN set"),
             on_click=lambda e: self._toggle_lock(), visible=pin)
         return ft.Container(content=ft.Row([
             ft.Icon(ft.Icons.FOLDER_SHARED, color=ft.Colors.CYAN_ACCENT, size=28),
-            ft.Text("Documents", size=22, weight=ft.FontWeight.BOLD, expand=True),
+            ft.Text(tr("Documents"), size=22, weight=ft.FontWeight.BOLD, expand=True),
             lock_btn,
-            ft.IconButton(ft.Icons.SETTINGS_OUTLINED, tooltip="PIN & renewal quests", on_click=lambda e: self._settings()),
-            ft.Button("Add document", icon=ft.Icons.ADD, on_click=lambda e: self.open_editor()),
+            ft.IconButton(ft.Icons.SETTINGS_OUTLINED, tooltip=tr("PIN & renewal quests"), on_click=lambda e: self._settings()),
+            ft.Button(tr("Add document"), icon=ft.Icons.ADD, on_click=lambda e: self.open_editor()),
         ], spacing=8), padding=ft.Padding.only(left=20, right=20, top=18))
 
     def _toggle_lock(self):
@@ -302,36 +307,36 @@ class DocumentsView(ft.Column):
                                border=ft.Border.all(1, ccolor), border_radius=4,
                                padding=ft.Padding.symmetric(horizontal=6, vertical=1))]
         if doc["annual"]:
-            badges.append(ft.Container(content=ft.Text("Yearly", size=11, color=ft.Colors.CYAN_200),
+            badges.append(ft.Container(content=ft.Text(tr("Yearly"), size=11, color=ft.Colors.CYAN_200),
                                        border=ft.Border.all(1, ft.Colors.CYAN_200), border_radius=4,
                                        padding=ft.Padding.symmetric(horizontal=6, vertical=1)))
-        info = [ft.Text(f"Reminder from {date.fromisoformat(doc['warn_start']):%d/%m/%Y} "
-                        f"({warn_label(doc['warn_days'])})", size=11, color=ft.Colors.GREY_500)]
+        info = [ft.Text(tr("Reminder from {date} ({lead})", date=f"{date.fromisoformat(doc['warn_start']):%d/%m/%Y}",
+                           lead=warn_label(doc["warn_days"])), size=11, color=ft.Colors.GREY_500)]
         if doc["quest_id"] and doc["status"] != "ok":
             info.append(ft.Row([ft.Icon(ft.Icons.MAP_OUTLINED, size=13, color=ft.Colors.AMBER_200),
-                                ft.Text("Renewal quest in your Quest Log", size=11, color=ft.Colors.AMBER_200)],
+                                ft.Text(tr("Renewal quest in your Quest Log"), size=11, color=ft.Colors.AMBER_200)],
                                spacing=4))
         if doc["has_number"]:
             info.append(self._number_row(doc))
         if doc["has_notes"]:
             info.append(self._notes_row(doc))
 
-        renew_btn = ft.Button("Renewed", icon=ft.Icons.AUTORENEW,
+        renew_btn = ft.Button(tr("Renewed"), icon=ft.Icons.AUTORENEW,
                               on_click=lambda e, d=doc: open_renew_dialog(self.app_page, d, self._renewed),
                               bgcolor=ft.Colors.GREEN_ACCENT if doc["status"] != "ok" else None,
                               color=ft.Colors.BLACK if doc["status"] != "ok" else None)
         history = db.get_doc_renewals(doc["id"])
         actions = [renew_btn]
         if history:
-            actions.append(ft.IconButton(ft.Icons.HISTORY, icon_size=18, tooltip="Renewal history",
+            actions.append(ft.IconButton(ft.Icons.HISTORY, icon_size=18, tooltip=tr("Renewal history"),
                                          on_click=lambda e, d=doc, h=history: self._history(d, h)))
         actions += [
-            ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=18, tooltip="Edit",
+            ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=18, tooltip=tr("Edit"),
                           on_click=lambda e, d=doc: self.open_editor(d)),
-            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=ft.Colors.RED_300, tooltip="Delete",
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=18, icon_color=ft.Colors.RED_300, tooltip=tr("Delete"),
                           on_click=lambda e, d=doc: confirm_action(
-                              self.app_page, "Delete document?",
-                              f"'{d['title']}' and its renewal history will be removed permanently.",
+                              self.app_page, tr("Delete document?"),
+                              tr("'{title}' and its renewal history will be removed permanently.", title=d["title"]),
                               lambda: (db.delete_tracked_doc(d["id"]), self._changed()))),
         ]
         return ft.Container(
@@ -352,21 +357,21 @@ class DocumentsView(ft.Column):
     def _number_row(self, doc):
         if not LOCK.unlocked():
             return ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE, size=14, color=ft.Colors.GREY_500),
-                           ft.Text("Number saved • unlock to view", size=12, color=ft.Colors.GREY_500)], spacing=6)
+                           ft.Text(tr("Number saved • unlock to view"), size=12, color=ft.Colors.GREY_500)], spacing=6)
         number, _ = db.get_doc_secrets(doc["id"])
         shown = doc["id"] in self.revealed
-        copy_btn = ft.IconButton(ft.Icons.COPY, icon_size=16, tooltip=f"Copy (clipboard clears in {CLIPBOARD_CLEAR_SECONDS}s)")
+        copy_btn = ft.IconButton(ft.Icons.COPY, icon_size=16, tooltip=tr("Copy (clipboard clears in {n}s)", n=CLIPBOARD_CLEAR_SECONDS))
         copy_btn.on_click = lambda e, n=number, b=copy_btn: self._copy(n, b)
         return ft.Row([
             ft.Text(number if shown else mask_number(number), size=13, font_family="Consolas", selectable=shown),
             ft.IconButton(ft.Icons.VISIBILITY_OFF if shown else ft.Icons.VISIBILITY, icon_size=16,
-                          tooltip="Hide" if shown else "Show", on_click=lambda e, i=doc["id"]: self._toggle_reveal(i)),
+                          tooltip=tr("Hide") if shown else tr("Show"), on_click=lambda e, i=doc["id"]: self._toggle_reveal(i)),
             copy_btn,
         ], spacing=0)
 
     def _notes_row(self, doc):
         if not LOCK.unlocked():
-            return ft.Text("Notes saved • unlock to view", size=12, color=ft.Colors.GREY_500)
+            return ft.Text(tr("Notes saved • unlock to view"), size=12, color=ft.Colors.GREY_500)
         _, notes = db.get_doc_secrets(doc["id"])
         return ft.Text(notes, size=12, color=ft.Colors.GREY_300, selectable=True)
 
@@ -392,40 +397,41 @@ class DocumentsView(ft.Column):
             t.start()
 
     def _renewed(self, xp):
-        self._changed(f"Renewed! +{xp:g} XP from the renewal quest 🎉" if xp else "Renewed — reminders reset.")
+        self._changed(tr("Renewed! +{xp} XP from the renewal quest 🎉", xp=f"{xp:g}") if xp
+                      else tr("Renewed — reminders reset."))
 
     def _history(self, doc, history):
         rows = [ft.Text(f"{date.fromisoformat(h['renewed_on']):%d/%m/%Y}: "
                         f"{date.fromisoformat(h['old_expiration']):%d/%m/%Y} → "
                         f"{date.fromisoformat(h['new_expiration']):%d/%m/%Y}", size=13) for h in history]
         self.app_page.show_dialog(ft.AlertDialog(
-            title=ft.Text(f"Renewals: {doc['title']}", weight=ft.FontWeight.BOLD),
+            title=ft.Text(tr("Renewals: {title}", title=doc["title"]), weight=ft.FontWeight.BOLD),
             content=ft.Container(width=380, content=ft.Column(rows, spacing=6, tight=True)),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.app_page.pop_dialog())]))
+            actions=[ft.TextButton(tr("Close"), on_click=lambda e: self.app_page.pop_dialog())]))
 
     # ------------------------------------------------------------ editor
     def open_editor(self, doc=None):
         if doc and (doc["has_number"] or doc["has_notes"]) and not LOCK.unlocked():
-            ask_pin(self.app_page, lambda: (self._unlocked(), self.open_editor(doc)), title="Unlock to edit")
+            ask_pin(self.app_page, lambda: (self._unlocked(), self.open_editor(doc)), title=tr("Unlock to edit"))
             return
         editing = doc is not None
         number, notes = db.get_doc_secrets(doc["id"]) if editing else ("", "")
         first_type = db.DOC_TYPES["Identity"][1][0]
-        type_dd = ft.Dropdown(label="Type", value=doc["doc_type"] if editing else first_type, dense=True,
+        type_dd = ft.Dropdown(label=tr("Type"), value=doc["doc_type"] if editing else first_type, dense=True,
                               options=type_options(), menu_height=360, expand=True)
-        title_f = ft.TextField(label="Name (e.g. My CNH, Honda Civic IPVA)", value=doc["title"] if editing else "",
+        title_f = ft.TextField(label=tr("Name (e.g. My CNH, Honda Civic IPVA)"), value=doc["title"] if editing else "",
                                dense=True, autofocus=not editing)
-        exp_f = ft.TextField(label="Expiration date (DD/MM/YYYY)", dense=True, expand=True,
+        exp_f = ft.TextField(label=tr("Expiration date (DD/MM/YYYY)"), dense=True, expand=True,
                              value=f"{date.fromisoformat(doc['expiration_date']):%d/%m/%Y}" if editing else "")
         warn = doc["warn_days"] if editing else db.doc_type_defaults(first_type)[1]
-        warn_dd = ft.Dropdown(label="Remind me", value=str(warn), dense=True, width=210,
+        warn_dd = ft.Dropdown(label=tr("Remind me"), value=str(warn), dense=True, width=210,
                               options=[ft.DropdownOption(key=str(d), text=warn_label(d))
                                        for d in sorted(set(WARN_OPTIONS + [warn]))])
-        annual_cb = ft.Checkbox(label="Renews every year (IPVA, licensing, IPTU, insurance…)",
+        annual_cb = ft.Checkbox(label=tr("Renews every year (IPVA, licensing, IPTU, insurance…)"),
                                 value=doc["annual"] if editing else db.doc_type_defaults(first_type)[2])
-        number_f = ft.TextField(label="Number (optional — encrypted)", value=number, dense=True,
+        number_f = ft.TextField(label=tr("Number (optional — encrypted)"), value=number, dense=True,
                                 password=True, can_reveal_password=True)
-        notes_f = ft.TextField(label="Notes (optional — encrypted)", value=notes, dense=True, multiline=True,
+        notes_f = ft.TextField(label=tr("Notes (optional — encrypted)"), value=notes, dense=True, multiline=True,
                                min_lines=1, max_lines=4)
         error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
@@ -445,7 +451,7 @@ class DocumentsView(ft.Column):
             title = (title_f.value or "").strip()
             exp = db.parse_flexible_date(exp_f.value or "")
             if not title or not exp:
-                error.value = "A name and a valid expiration date (DD/MM/YYYY) are required."
+                error.value = tr("A name and a valid expiration date (DD/MM/YYYY) are required.")
                 self._update()
                 return
             fields = dict(title=title, doc_type=type_dd.value, category=db.doc_type_defaults(type_dd.value)[0],
@@ -458,31 +464,31 @@ class DocumentsView(ft.Column):
             else:
                 db.add_tracked_doc(fields.pop("title"), fields.pop("doc_type"), fields.pop("expiration_date"), **fields)
             self.app_page.pop_dialog()
-            self._changed("Saved.")
+            self._changed(tr("Saved."))
 
         self.app_page.show_dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("Edit document" if editing else "Add document", weight=ft.FontWeight.BOLD),
+            modal=True, title=ft.Text(tr("Edit document") if editing else tr("Add document"), weight=ft.FontWeight.BOLD),
             content=ft.Container(width=520, content=ft.Column([
                 ft.Row([type_dd]), title_f, ft.Row([exp_f, warn_dd], spacing=10), annual_cb,
                 ft.Divider(height=1, color=ft.Colors.GREY_800),
-                ft.Text("Optional — only if you really need it here:", size=12, color=ft.Colors.GREY_400),
+                ft.Text(tr("Optional — only if you really need it here:"), size=12, color=ft.Colors.GREY_400),
                 number_f, notes_f, error,
             ], spacing=12, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
-                     ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]))
+            actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: self.app_page.pop_dialog()),
+                     ft.Button(tr("Save"), icon=ft.Icons.CHECK, on_click=save)]))
 
     # ------------------------------------------------------------ settings (PIN, renewal quests)
     def _settings(self):
         page = self.app_page
         has_pin = db.has_doc_pin()
-        quests_cb = ft.Checkbox(label="Create a renewal quest when a document needs attention",
+        quests_cb = ft.Checkbox(label=tr("Create a renewal quest when a document needs attention"),
                                 value=db.renewal_quests_enabled(),
                                 on_change=lambda e: db.set_hud_setting(db.SETTING_DOC_QUESTS,
                                                                        "true" if e.control.value else "false"))
-        current_f = ft.TextField(label="Current PIN", password=True, dense=True, visible=has_pin,
+        current_f = ft.TextField(label=tr("Current PIN"), password=True, dense=True, visible=has_pin,
                                  keyboard_type=ft.KeyboardType.NUMBER)
-        new_f = ft.TextField(label="New PIN (4-8 digits)", password=True, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
-        confirm_f = ft.TextField(label="Repeat new PIN", password=True, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+        new_f = ft.TextField(label=tr("New PIN (4-8 digits)"), password=True, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+        confirm_f = ft.TextField(label=tr("Repeat new PIN"), password=True, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
         msg = ft.Text("", size=12)
 
         def show(text, ok):
@@ -491,72 +497,74 @@ class DocumentsView(ft.Column):
 
         def save_pin(e):
             if has_pin and not db.check_doc_pin(current_f.value or ""):
-                return show("Current PIN is wrong.", False)
+                return show(tr("Current PIN is wrong."), False)
             pin = (new_f.value or "").strip()
             if not (pin.isdigit() and 4 <= len(pin) <= 8):
-                return show("The PIN must have 4 to 8 digits.", False)
+                return show(tr("The PIN must have 4 to 8 digits."), False)
             if pin != (confirm_f.value or "").strip():
-                return show("The two PINs don't match.", False)
+                return show(tr("The two PINs don't match."), False)
             db.set_doc_pin(pin)
             LOCK.lock()
             page.pop_dialog()
-            self._changed("PIN saved — numbers and notes are now locked.")
+            self._changed(tr("PIN saved — numbers and notes are now locked."))
 
         def remove_pin(e):
             if not db.check_doc_pin(current_f.value or ""):
-                return show("Type the current PIN to remove it.", False)
+                return show(tr("Type the current PIN to remove it."), False)
             db.remove_doc_pin()
             page.pop_dialog()
-            self._changed("PIN removed.")
+            self._changed(tr("PIN removed."))
 
         def forgot(e):
             page.pop_dialog()
-            confirm_action(page, "Forgot the PIN?",
-                           "The PIN is removed AND every saved number and note is erased (names and dates stay). "
-                           "This can't be undone.",
+            confirm_action(page, tr("Forgot the PIN?"),
+                           tr("The PIN is removed AND every saved number and note is erased (names and dates stay). "
+                           "This can't be undone."),
                            lambda: (db.reset_doc_pin_and_wipe_secrets(), LOCK.lock(),
-                                    self._changed("PIN reset — saved numbers and notes were erased.")),
-                           confirm_label="Erase and reset")
+                                    self._changed(tr("PIN reset — saved numbers and notes were erased."))),
+                           confirm_label=tr("Erase and reset"))
 
-        pin_actions = [ft.Button("Change PIN" if has_pin else "Set PIN", icon=ft.Icons.PIN, on_click=save_pin)]
+        pin_actions = [ft.Button(tr("Change PIN") if has_pin else tr("Set PIN"), icon=ft.Icons.PIN, on_click=save_pin)]
         if has_pin:
-            pin_actions += [ft.TextButton("Remove PIN", on_click=remove_pin),
-                            ft.TextButton("Forgot PIN", on_click=forgot)]
+            pin_actions += [ft.TextButton(tr("Remove PIN"), on_click=remove_pin),
+                            ft.TextButton(tr("Forgot PIN"), on_click=forgot)]
         page.show_dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("Documents settings", weight=ft.FontWeight.BOLD),
+            modal=True, title=ft.Text(tr("Documents settings"), weight=ft.FontWeight.BOLD),
             content=ft.Container(width=460, content=ft.Column([
                 quests_cb,
                 ft.Divider(height=1, color=ft.Colors.GREY_800),
-                ft.Text("PIN lock", weight=ft.FontWeight.BOLD),
-                ft.Text("Hides numbers and notes until you type the PIN (they are already encrypted on disk; the PIN "
-                        "keeps them off the screen).", size=12, color=ft.Colors.GREY_400),
+                ft.Text(tr("PIN lock"), weight=ft.FontWeight.BOLD),
+                ft.Text(tr("Hides numbers and notes until you type the PIN (they are already encrypted on disk; the PIN "
+                        "keeps them off the screen)."), size=12, color=ft.Colors.GREY_400),
                 current_f, new_f, confirm_f, ft.Row(pin_actions, spacing=6, wrap=True), msg,
             ], spacing=10, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-            actions=[ft.TextButton("Close", on_click=lambda e: (page.pop_dialog(), self.render()))]))
+            actions=[ft.TextButton(tr("Close"), on_click=lambda e: (page.pop_dialog(), self.render()))]))
 
     # ------------------------------------------------------------ old format
     def _legacy_banner(self, count):
         def run(import_safe):
             n = db.remove_legacy_documents(import_safe_fields=import_safe)
-            self._changed(f"Old documents removed — {n} imported (name, type and date only)." if import_safe
-                          else "Old documents deleted.")
+            self._changed(tr("Old documents removed — {n} imported (name, type and date only).", n=n) if import_safe
+                          else tr("Old documents deleted."))
 
         return ft.Container(content=ft.Column([
             ft.Row([ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.AMBER_ACCENT),
-                    ft.Text(f"{count} document{'s' if count != 1 else ''} from the old format (with numbers and extra "
-                            "fields) are still stored.", weight=ft.FontWeight.BOLD, expand=True)]),
-            ft.Text("Import keeps only the name, type and expiration date; the old rows (numbers included) are then "
-                    "deleted for good. Daily backups keep a copy for up to 14 days.", size=12, color=ft.Colors.GREY_400),
+                    ft.Text(trn("{n} document from the old format (with numbers and extra fields) is still stored.",
+                                "{n} documents from the old format (with numbers and extra fields) are still stored.",
+                                count), weight=ft.FontWeight.BOLD, expand=True)]),
+            ft.Text(tr("Import keeps only the name, type and expiration date; the old rows (numbers included) are then "
+                    "deleted for good. Daily backups keep a copy for up to 14 days."), size=12, color=ft.Colors.GREY_400),
             ft.Row([
-                ft.Button("Import without numbers", icon=ft.Icons.DOWNLOAD_DONE, on_click=lambda e: confirm_action(
-                    self.app_page, "Import and delete old documents?",
-                    "Names, types and expiration dates are imported; numbers, notes and extra fields are deleted.",
-                    lambda: run(True), confirm_label="Import")),
-                ft.TextButton("Delete all", icon=ft.Icons.DELETE_FOREVER, icon_color=ft.Colors.RED_300,
+                ft.Button(tr("Import without numbers"), icon=ft.Icons.DOWNLOAD_DONE, on_click=lambda e: confirm_action(
+                    self.app_page, tr("Import and delete old documents?"),
+                    tr("Names, types and expiration dates are imported; numbers, notes and extra fields are deleted."),
+                    lambda: run(True), confirm_label=tr("Import"))),
+                ft.TextButton(tr("Delete all"), icon=ft.Icons.DELETE_FOREVER, icon_color=ft.Colors.RED_300,
                               on_click=lambda e: confirm_action(
-                                  self.app_page, "Delete old documents?",
-                                  f"All {count} old-format documents are deleted permanently.", lambda: run(False),
-                                  confirm_label="Delete all")),
+                                  self.app_page, tr("Delete old documents?"),
+                                  tr("All {n} old-format documents are deleted permanently.", n=count),
+                                  lambda: run(False),
+                                  confirm_label=tr("Delete all"))),
             ], spacing=8),
         ], spacing=8), bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.AMBER), border_radius=10, padding=14,
             margin=ft.Margin.symmetric(horizontal=20))

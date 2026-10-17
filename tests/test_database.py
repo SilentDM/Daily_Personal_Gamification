@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import database as db  # noqa: E402
+import i18n  # noqa: E402
 import secure  # noqa: E402
 from constants import (XP_QUEST, XP_STUDY, XP_STUDY_LOG, XP_REVIEW, REVIEW_DAYS, XP_SUBQUEST,  # noqa: E402
                        XP_QUEST_LOG, QUEST_DIFFICULTY_XP)
@@ -33,6 +34,7 @@ class DbTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
         secure._reset()
         self.addCleanup(secure._reset)
+        i18n.set_language("en")  # deterministic texts, whatever the machine's language
         db.init_db()
 
     def tearDown(self):

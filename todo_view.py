@@ -7,7 +7,8 @@ import flet_charts as fch
 
 import ai_gemini
 import database as db
-from constants import QUEST_TYPES, QUEST_DIFFICULTY_XP, QUEST_REPEATS, XP_SUBQUEST, XP_QUEST_LOG, DAY_NAMES
+from constants import QUEST_TYPES, QUEST_DIFFICULTY_XP, QUEST_REPEATS, XP_SUBQUEST, XP_QUEST_LOG
+from i18n import tr, trn, day_short
 from ui_helpers import confirm_action, update_ui
 from wallpaper import request_wallpaper_update as update_desktop_wallpaper
 
@@ -19,7 +20,6 @@ TYPE_STYLE = {
 DIFFICULTY_COLORS = {"Easy": ft.Colors.GREEN_300, "Normal": ft.Colors.CYAN_300,
                      "Hard": ft.Colors.ORANGE_ACCENT, "Epic": ft.Colors.PURPLE_ACCENT_100}
 REPEAT_LABELS = {"none": "One-time", "weekly": "Every week", "monthly": "Every month"}
-PERIOD_WORD = {"weekly": "this week", "monthly": "this month"}
 FILTERS = ("active", "hold", "fame")
 GOLD = ft.Colors.AMBER_ACCENT
 
@@ -36,7 +36,7 @@ def fmt_day(iso: str) -> str:
         d = date.fromisoformat(iso[:10])
     except (TypeError, ValueError):
         return iso or ""
-    return f"{DAY_NAMES[d.weekday()]}, {d:%d/%m/%Y}"
+    return f"{day_short(d.weekday())}, {d:%d/%m/%Y}"
 
 
 def parse_number(text):
@@ -70,23 +70,23 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
             open_ai_settings(page)
 
         page.show_dialog(ft.AlertDialog(
-            title=ft.Text("AI quest planner", weight=ft.FontWeight.BOLD),
-            content=ft.Text(ai_gemini.status_text() + "\nThe planner uses the same Gemini key as the AI study "
-                            "reviews (Study tab → ✨)."),
-            actions=[ft.TextButton("Close", on_click=lambda e: page.pop_dialog()),
-                     ft.Button("Open AI settings", icon=ft.Icons.SETTINGS, on_click=open_settings)],
+            title=ft.Text(tr("AI quest planner"), weight=ft.FontWeight.BOLD),
+            content=ft.Text(ai_gemini.status_text() + "\n" + tr("The planner uses the same Gemini key as the AI "
+                                                                   "study reviews (Options → AI).")),
+            actions=[ft.TextButton(tr("Close"), on_click=lambda e: page.pop_dialog()),
+                     ft.Button(tr("Open AI settings"), icon=ft.Icons.SETTINGS, on_click=open_settings)],
         ))
         return
 
-    goal_f = ft.TextField(label="What do you want to achieve?", value=existing["title"] if existing else "",
+    goal_f = ft.TextField(label=tr("What do you want to achieve?"), value=existing["title"] if existing else "",
                           autofocus=not existing, dense=True)
-    context_f = ft.TextField(label="Context (optional): where you are now, constraints, what you know",
+    context_f = ft.TextField(label=tr("Context (optional): where you are now, constraints, what you know"),
                              multiline=True, min_lines=2, max_lines=5, dense=True)
     status = ft.Text("", size=12)
     plan_area = ft.Column(spacing=10, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
     state = {"plan": None}
-    plan_btn = ft.Button("Plan with AI" if not existing else "Suggest steps", icon=ft.Icons.AUTO_AWESOME)
-    save_btn = ft.Button("Create quest" if not existing else "Add selected steps", icon=ft.Icons.CHECK,
+    plan_btn = ft.Button(tr("Plan with AI") if not existing else tr("Suggest steps"), icon=ft.Icons.AUTO_AWESOME)
+    save_btn = ft.Button(tr("Create quest") if not existing else tr("Add selected steps"), icon=ft.Icons.CHECK,
                          visible=False)
 
     def build_preview(plan):
@@ -99,34 +99,34 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
             rows.append(ft.Row([cb, tf], spacing=4, vertical_alignment=ft.CrossAxisAlignment.START))
         state["subs"] = sub_rows
         if existing:
-            controls = [ft.Text("Suggested extra steps (untick the ones you don't want):", size=12,
+            controls = [ft.Text(tr("Suggested extra steps (untick the ones you don't want):"), size=12,
                                 color=ft.Colors.GREY_400), *rows]
             if not rows:
-                controls.append(ft.Text("Gemini had no extra steps to add.", color=ft.Colors.GREY_500))
+                controls.append(ft.Text(tr("Gemini had no extra steps to add."), color=ft.Colors.GREY_500))
             if plan.measurable and not existing.get("has_metric") and existing.get("repeat") == "none":
                 state["metric_cb"] = ft.Checkbox(
-                    label=f"Also track a target: {fmt_num(plan.metric_start)} → {fmt_num(plan.metric_target)} "
-                          f"{plan.metric_unit}", value=False)
+                    label=tr("Also track a target: {start} → {target} {unit}", start=fmt_num(plan.metric_start),
+                             target=fmt_num(plan.metric_target), unit=plan.metric_unit), value=False)
                 controls.append(state["metric_cb"])
             plan_area.controls = controls
             return
-        state["title"] = ft.TextField(label="Quest title", value=plan.title, dense=True)
-        state["type"] = ft.Dropdown(label="Type", value=plan.quest_type, dense=True, width=130,
-                                    options=[ft.DropdownOption(t) for t in QUEST_TYPES])
-        state["difficulty"] = ft.Dropdown(label="Difficulty", value=plan.difficulty, dense=True, width=190,
-                                          options=[ft.DropdownOption(key=d, text=f"{d} (+{xp} XP)")
+        state["title"] = ft.TextField(label=tr("Quest title"), value=plan.title, dense=True)
+        state["type"] = ft.Dropdown(label=tr("Type"), value=plan.quest_type, dense=True, width=130,
+                                    options=[ft.DropdownOption(key=t, text=tr(t)) for t in QUEST_TYPES])
+        state["difficulty"] = ft.Dropdown(label=tr("Difficulty"), value=plan.difficulty, dense=True, width=190,
+                                          options=[ft.DropdownOption(key=d, text=f"{tr(d)} (+{xp} XP)")
                                                    for d, xp in QUEST_DIFFICULTY_XP.items()])
-        state["repeat"] = ft.Dropdown(label="Repeats", value=plan.repeat, dense=True, width=160,
-                                      options=[ft.DropdownOption(key=r, text=REPEAT_LABELS[r]) for r in QUEST_REPEATS])
-        state["description"] = ft.TextField(label="Description", value=plan.description, multiline=True,
+        state["repeat"] = ft.Dropdown(label=tr("Repeats"), value=plan.repeat, dense=True, width=160,
+                                      options=[ft.DropdownOption(key=r, text=tr(REPEAT_LABELS[r])) for r in QUEST_REPEATS])
+        state["description"] = ft.TextField(label=tr("Description"), value=plan.description, multiline=True,
                                             min_lines=2, max_lines=5, dense=True)
-        state["first"] = ft.TextField(label="First step (becomes your 'next step' bookmark)", value=plan.first_step,
+        state["first"] = ft.TextField(label=tr("First step (becomes your 'next step' bookmark)"), value=plan.first_step,
                                       dense=True)
-        state["metric_cb"] = ft.Checkbox(label="Track a numeric target", value=plan.measurable)
-        state["unit"] = ft.TextField(label="Unit", value=plan.metric_unit, dense=True, width=110)
-        state["start"] = ft.TextField(label="Start", value=fmt_num(plan.metric_start) if plan.measurable else "",
+        state["metric_cb"] = ft.Checkbox(label=tr("Track a numeric target"), value=plan.measurable)
+        state["unit"] = ft.TextField(label=tr("Unit"), value=plan.metric_unit, dense=True, width=110)
+        state["start"] = ft.TextField(label=tr("Start"), value=fmt_num(plan.metric_start) if plan.measurable else "",
                                       dense=True, width=110)
-        state["target"] = ft.TextField(label="Target", value=fmt_num(plan.metric_target) if plan.measurable else "",
+        state["target"] = ft.TextField(label=tr("Target"), value=fmt_num(plan.metric_target) if plan.measurable else "",
                                        dense=True, width=110)
         metric_row = ft.Row([state["unit"], state["start"], state["target"]], spacing=8, visible=plan.measurable)
         state["metric_cb"].on_change = lambda e: (setattr(metric_row, "visible", bool(e.control.value)), page.update())
@@ -135,7 +135,7 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
             state["title"],
             ft.Row([state["type"], state["difficulty"], state["repeat"]], spacing=8, wrap=True),
             state["description"],
-            ft.Text("Steps (untick or edit before saving):", size=12, color=ft.Colors.GREY_400),
+            ft.Text(tr("Steps (untick or edit before saving):"), size=12, color=ft.Colors.GREY_400),
             *rows,
             state["first"],
             state["metric_cb"],
@@ -144,11 +144,11 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
 
     def run_plan(e):
         if not (goal_f.value or "").strip():
-            status.value, status.color = "Describe your goal first.", ft.Colors.RED_ACCENT
+            status.value, status.color = tr("Describe your goal first."), ft.Colors.RED_ACCENT
             page.update()
             return
         plan_btn.disabled = True
-        status.value, status.color = "Gemini is planning your quest…", ft.Colors.GREY_400
+        status.value, status.color = tr("Gemini is planning your quest…"), ft.Colors.GREY_400
         page.update()
 
         def work():
@@ -159,7 +159,7 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
                 build_preview(plan)
                 status.value = ""
                 save_btn.visible = True
-                plan_btn.content = "Plan again"
+                plan_btn.content = tr("Plan again")
             except Exception as exc:
                 status.value, status.color = str(exc), ft.Colors.RED_ACCENT
             plan_btn.disabled = False
@@ -184,14 +184,14 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
             return
         title = (state["title"].value or "").strip()
         if not title:
-            status.value, status.color = "The quest needs a title.", ft.Colors.RED_ACCENT
+            status.value, status.color = tr("The quest needs a title."), ft.Colors.RED_ACCENT
             page.update()
             return
         metric = {}
         if state["metric_cb"].value and state["repeat"].value == "none":
             start, target = parse_number(state["start"].value), parse_number(state["target"].value)
             if start is None or target is None or not (state["unit"].value or "").strip():
-                status.value, status.color = "Fill unit, start and target (numbers) or untick the target.", \
+                status.value, status.color = tr("Fill unit, start and target (numbers) or untick the target."), \
                     ft.Colors.RED_ACCENT
                 page.update()
                 return
@@ -208,14 +208,15 @@ def open_quest_planner(page: ft.Page, on_saved=None, existing: dict = None):
     page.show_dialog(ft.AlertDialog(
         modal=True,
         title=ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=GOLD),
-                      ft.Text("AI quest planner" if not existing else f"More steps for '{existing['title']}'",
+                      ft.Text(tr("AI quest planner") if not existing else
+                              tr("More steps for '{title}'", title=existing["title"]),
                               weight=ft.FontWeight.BOLD, expand=True)]),
         content=ft.Container(width=620, content=ft.Column(
             [goal_f, context_f, ft.Row([plan_btn, status], spacing=12), plan_area,
-             ft.Text("No deadlines: Gemini is told to order steps, never to schedule them.", size=11,
+             ft.Text(tr("No deadlines: Gemini is told to order steps, never to schedule them."), size=11,
                      color=ft.Colors.GREY_600)],
             spacing=12, tight=True, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()), save_btn],
+        actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: page.pop_dialog()), save_btn],
     ))
 
 
@@ -273,7 +274,7 @@ class TodoView(ft.Row):
 
     # ------------------------------------------------------------ sidebar
     def _render_sidebar(self, quests, visible):
-        new_f = ft.TextField(hint_text="New quest…", expand=True, dense=True, text_size=13)
+        new_f = ft.TextField(hint_text=tr("New quest…"), expand=True, dense=True, text_size=13)
 
         def add(e=None):
             title = (new_f.value or "").strip()
@@ -289,21 +290,22 @@ class TodoView(ft.Row):
 
         controls = [
             ft.Row([ft.Icon(ft.Icons.MILITARY_TECH, color=GOLD, size=26),
-                    ft.Text("Quest Log", size=18, weight=ft.FontWeight.BOLD, expand=True),
+                    ft.Text(tr("Quest Log"), size=18, weight=ft.FontWeight.BOLD, expand=True),
                     ft.IconButton(ft.Icons.AUTO_AWESOME, icon_color=GOLD if ai_gemini.is_configured()
-                                  else ft.Colors.GREY_500, tooltip="Plan a new quest with AI",
+                                  else ft.Colors.GREY_500, tooltip=tr("Plan a new quest with AI"),
                                   on_click=lambda e: open_quest_planner(self.app_page, self._saved_from_planner))]),
-            ft.Row([new_f, ft.IconButton(ft.Icons.ADD_CIRCLE, icon_color=GOLD, tooltip="Add quest", on_click=add)]),
+            ft.Row([new_f, ft.IconButton(ft.Icons.ADD_CIRCLE, icon_color=GOLD, tooltip=tr("Add quest"), on_click=add)]),
             ft.Container(
                 content=ft.Row([ft.Icon(ft.Icons.EMOJI_EVENTS, color=GOLD, size=18),
-                                ft.Text(f"This week: {done_count} quest{'s' if done_count != 1 else ''} done • "
-                                        f"+{week_xp:g} XP from quests", size=12, expand=True)]),
+                                ft.Text(trn("This week: {n} quest done • +{xp} XP from quests",
+                                            "This week: {n} quests done • +{xp} XP from quests", done_count,
+                                            xp=f"{week_xp:g}"), size=12, expand=True)]),
                 bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.AMBER), border_radius=8, padding=8,
             ),
             ft.SegmentedButton(
-                segments=[ft.Segment(value="active", label=ft.Text(f"Active {counts['active']}", size=12, no_wrap=True)),
-                          ft.Segment(value="hold", label=ft.Text(f"On hold {counts['hold']}", size=12, no_wrap=True)),
-                          ft.Segment(value="fame", label=ft.Text(f"Hall of Fame {counts['fame']}", size=12,
+                segments=[ft.Segment(value="active", label=ft.Text(tr("Active {n}", n=counts["active"]), size=12, no_wrap=True)),
+                          ft.Segment(value="hold", label=ft.Text(tr("On hold {n}", n=counts["hold"]), size=12, no_wrap=True)),
+                          ft.Segment(value="fame", label=ft.Text(tr("Hall of Fame {n}", n=counts["fame"]), size=12,
                                                                  no_wrap=True))],
                 selected=[self.filter], show_selected_icon=False,
                 on_change=lambda e: self._set_filter(e.control.selected[0]) if e.control.selected else None,
@@ -311,9 +313,9 @@ class TodoView(ft.Row):
             ft.Divider(color=ft.Colors.GREY_800, height=1),
         ]
         tiles = [self._tile(q) for q in visible] or [ft.Text(
-            {"active": "No active quests. Add one above, or let ✨ plan one with you!",
-             "hold": "Nothing on hold.",
-             "fame": "Completed quests will be celebrated here."}[self.filter], color=ft.Colors.GREY_500, size=13)]
+            tr({"active": "No active quests. Add one above, or let ✨ plan one with you!",
+                "hold": "Nothing on hold.",
+                "fame": "Completed quests will be celebrated here."}[self.filter]), color=ft.Colors.GREY_500, size=13)]
         controls.append(ft.Column(tiles, spacing=6, scroll=ft.ScrollMode.AUTO, expand=True))
         self.sidebar.controls = controls
 
@@ -331,21 +333,24 @@ class TodoView(ft.Row):
         icon, icolor = TYPE_STYLE.get(q["quest_type"], TYPE_STYLE["Main"])
         dcolor = DIFFICULTY_COLORS.get(q["difficulty"], ft.Colors.CYAN_300)
         if q["status"] == "Complete":
-            hint = f"Completed {fmt_day(q['completed_at'] or '')} • +{q['xp_reward']} XP"
+            hint = tr("Completed {date} • +{xp} XP", date=fmt_day(q["completed_at"] or ""), xp=q["xp_reward"])
             hint_color = GOLD
         elif q["repeat"] != "none":
             if q["done_this_period"]:
                 back = db.next_period_start(q["repeat"])
-                hint, hint_color = f"Done {PERIOD_WORD[q['repeat']]} ✓ • back {back:%d/%m}", ft.Colors.GREEN_ACCENT
+                hint = tr("Done this week ✓ • back {date}", date=f"{back:%d/%m}") if q["repeat"] == "weekly" else \
+                    tr("Done this month ✓ • back {date}", date=f"{back:%d/%m}")
+                hint_color = ft.Colors.GREEN_ACCENT
             else:
-                hint, hint_color = f"{REPEAT_LABELS[q['repeat']]} • ready", ft.Colors.CYAN_200
+                hint, hint_color = tr("{repeat} • ready", repeat=tr(REPEAT_LABELS[q["repeat"]])), ft.Colors.CYAN_200
         elif q["next_step"]:
             hint, hint_color = f"→ {q['next_step']}", ft.Colors.GREY_300
         elif q["has_metric"]:
             hint = f"{fmt_num(q['metric_current'])} / {fmt_num(q['metric_target'])} {q['metric_unit']}"
             hint_color = ft.Colors.GREY_300
         else:
-            hint, hint_color = f"{q['sub_done']}/{q['sub_total']} steps" if q["sub_total"] else "", ft.Colors.GREY_500
+            hint, hint_color = tr("{done}/{total} steps", done=q["sub_done"], total=q["sub_total"]) \
+                if q["sub_total"] else "", ft.Colors.GREY_500
         bar_color = GOLD if q["status"] == "Complete" else (ft.Colors.GREEN_ACCENT if q["progress_pct"] >= 99.9
                                                             else icolor)
         return ft.Container(
@@ -370,7 +375,7 @@ class TodoView(ft.Row):
             self.workspace.controls = [ft.Container(
                 content=ft.Column([
                     ft.Icon(ft.Icons.MAP_OUTLINED, size=48, color=ft.Colors.GREY_600),
-                    ft.Text("Start a quest on the left — or press ✨ and plan one with Gemini.",
+                    ft.Text(tr("Start a quest on the left — or press ✨ and plan one with Gemini."),
                             color=ft.Colors.GREY_400),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
                 alignment=ft.Alignment.CENTER, padding=50)]
@@ -390,37 +395,38 @@ class TodoView(ft.Row):
 
     def _header(self, q):
         qid = q["id"]
-        title_f = ft.TextField(value=q["title"], label="Quest", dense=True, expand=True, text_size=16)
-        title_f.on_blur = lambda e: self._save(qid, title=(e.control.value or "").strip() or "Untitled") \
+        title_f = ft.TextField(value=q["title"], label=tr("Quest"), dense=True, expand=True, text_size=16)
+        title_f.on_blur = lambda e: self._save(qid, title=(e.control.value or "").strip() or tr("Untitled")) \
             if (e.control.value or "").strip() != q["title"] else None
-        type_dd = ft.Dropdown(label="Type", value=q["quest_type"], dense=True, width=130,
-                              options=[ft.DropdownOption(t) for t in QUEST_TYPES],
+        type_dd = ft.Dropdown(label=tr("Type"), value=q["quest_type"], dense=True, width=130,
+                              options=[ft.DropdownOption(key=t, text=tr(t)) for t in QUEST_TYPES],
                               on_select=lambda e: self._save(qid, quest_type=e.control.value))
-        diff_dd = ft.Dropdown(label="Difficulty", value=q["difficulty"], dense=True, width=190,
-                              options=[ft.DropdownOption(key=d, text=f"{d} (+{xp} XP)")
+        diff_dd = ft.Dropdown(label=tr("Difficulty"), value=q["difficulty"], dense=True, width=190,
+                              options=[ft.DropdownOption(key=d, text=f"{tr(d)} (+{xp} XP)")
                                        for d, xp in QUEST_DIFFICULTY_XP.items()],
                               on_select=lambda e: self._save(qid, difficulty=e.control.value),
                               disabled=q["status"] == "Complete")
-        repeat_dd = ft.Dropdown(label="Repeats", value=q["repeat"], dense=True, width=160,
-                                options=[ft.DropdownOption(key=r, text=REPEAT_LABELS[r]) for r in QUEST_REPEATS],
+        repeat_dd = ft.Dropdown(label=tr("Repeats"), value=q["repeat"], dense=True, width=160,
+                                options=[ft.DropdownOption(key=r, text=tr(REPEAT_LABELS[r])) for r in QUEST_REPEATS],
                                 on_select=lambda e: self._save(qid, repeat=e.control.value),
                                 disabled=q["status"] == "Complete",
-                                tooltip="Repeatable quests can be completed once per week/month")
+                                tooltip=tr("Repeatable quests can be completed once per week/month"))
         actions = []
         if q["status"] == "Active":
-            actions.append(ft.TextButton("Put on hold", icon=ft.Icons.PAUSE_CIRCLE_OUTLINE,
+            actions.append(ft.TextButton(tr("Put on hold"), icon=ft.Icons.PAUSE_CIRCLE_OUTLINE,
                                          on_click=lambda e: (db.set_quest_status(qid, "On hold"), self._changed())))
         elif q["status"] == "On hold":
-            actions.append(ft.TextButton("Resume", icon=ft.Icons.PLAY_CIRCLE_OUTLINE,
+            actions.append(ft.TextButton(tr("Resume"), icon=ft.Icons.PLAY_CIRCLE_OUTLINE,
                                          on_click=lambda e: (db.set_quest_status(qid, "Active"), self._changed())))
         actions += [
-            ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=16, tooltip="Move quest up",
+            ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=16, tooltip=tr("Move quest up"),
                           on_click=lambda e: (db.move_quest(qid, "up"), self.render())),
-            ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=16, tooltip="Move quest down",
+            ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=16, tooltip=tr("Move quest down"),
                           on_click=lambda e: (db.move_quest(qid, "down"), self.render())),
-            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_400, tooltip="Delete quest",
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_400, tooltip=tr("Delete quest"),
                           on_click=lambda e: confirm_action(
-                              self.app_page, "Delete quest?", f"'{q['title']}', its steps and its log will be removed.",
+                              self.app_page, tr("Delete quest?"),
+                              tr("'{title}', its steps and its log will be removed.", title=q["title"]),
                               lambda: (db.delete_quest(qid), self._changed()))),
         ]
         return ft.Column([
@@ -434,42 +440,47 @@ class TodoView(ft.Row):
         pct = q["progress_pct"]
         parts = []
         if q["sub_total"]:
-            parts.append(f"{q['sub_done']}/{q['sub_total']} steps")
+            parts.append(tr("{done}/{total} steps", done=q["sub_done"], total=q["sub_total"]))
         if q["has_metric"]:
-            parts.append(f"{fmt_num(q['metric_current'])} of {fmt_num(q['metric_target'])} {q['metric_unit']}")
+            parts.append(tr("{current} of {target} {unit}", current=fmt_num(q["metric_current"]),
+                            target=fmt_num(q["metric_target"]), unit=q["metric_unit"]))
         if q["repeat"] != "none":
-            parts.append(f"completed {q['times_completed']} time{'s' if q['times_completed'] != 1 else ''}")
+            parts.append(trn("completed {n} time", "completed {n} times", q["times_completed"]))
         feedback = self.feedback.pop(qid, "")
 
         if q["status"] == "Complete":
             action = ft.Row([
                 ft.Icon(ft.Icons.EMOJI_EVENTS, color=GOLD),
-                ft.Text(f"Completed {fmt_day(q['completed_at'] or '')} • +{q['xp_reward']} XP earned",
+                ft.Text(tr("Completed {date} • +{xp} XP earned", date=fmt_day(q["completed_at"] or ""),
+                           xp=q["xp_reward"]),
                         color=GOLD, weight=ft.FontWeight.BOLD, expand=True),
-                ft.TextButton("Reopen", icon=ft.Icons.UNDO, on_click=lambda e: confirm_action(
-                    self.app_page, "Reopen quest?", f"It leaves the Hall of Fame and its +{q['xp_reward']} XP is "
-                    "removed until you complete it again.", lambda: (db.set_quest_status(qid, "Active"),
-                                                                     self._changed()), confirm_label="Reopen")),
+                ft.TextButton(tr("Reopen"), icon=ft.Icons.UNDO, on_click=lambda e: confirm_action(
+                    self.app_page, tr("Reopen quest?"), tr("It leaves the Hall of Fame and its +{xp} XP is removed "
+                                                           "until you complete it again.", xp=q["xp_reward"]), lambda: (db.set_quest_status(qid, "Active"),
+                                                                     self._changed()), confirm_label=tr("Reopen"))),
             ])
         elif q["repeat"] != "none" and q["done_this_period"]:
             back = db.next_period_start(q["repeat"])
             action = ft.Row([
                 ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_ACCENT),
-                ft.Text(f"Done {PERIOD_WORD[q['repeat']]}! Available again {fmt_day(back.isoformat())}.",
+                ft.Text((tr("Done this week! Available again {date}.", date=fmt_day(back.isoformat()))
+                         if q["repeat"] == "weekly" else
+                         tr("Done this month! Available again {date}.", date=fmt_day(back.isoformat()))),
                         color=ft.Colors.GREEN_ACCENT, expand=True),
-                ft.TextButton("Undo", icon=ft.Icons.UNDO,
+                ft.TextButton(tr("Undo"), icon=ft.Icons.UNDO,
                               on_click=lambda e: (db.undo_quest_completion(qid), self._changed())),
             ])
         else:
-            label = f"Complete {PERIOD_WORD[q['repeat']]}" if q["repeat"] != "none" else "Complete quest"
+            label = {"weekly": tr("Complete this week"), "monthly": tr("Complete this month")}.get(
+                q["repeat"], tr("Complete quest"))
             ready = pct >= 99.9 or not (q["sub_total"] or q["has_metric"])
             btn = ft.Button(f"{label} (+{q['xp_reward']} XP)", icon=ft.Icons.EMOJI_EVENTS,
                             on_click=lambda e: self.complete(q),
                             bgcolor=GOLD if ready else None, color=ft.Colors.BLACK if ready else None,
                             disabled=q["status"] == "On hold")
-            hint = "All steps done — turn it in!" if pct >= 99.9 and (q["sub_total"] or q["has_metric"]) else \
-                ("On hold — resume it to complete." if q["status"] == "On hold" else
-                 "You can complete it whenever you feel it's done.")
+            hint = tr("All steps done — turn it in!") if pct >= 99.9 and (q["sub_total"] or q["has_metric"]) else \
+                (tr("On hold — resume it to complete.") if q["status"] == "On hold" else
+                 tr("You can complete it whenever you feel it's done."))
             action = ft.Row([ft.Text(hint, size=12, color=ft.Colors.GREY_400, expand=True), btn])
 
         return ft.Container(
@@ -490,26 +501,27 @@ class TodoView(ft.Row):
     def complete(self, q):
         xp = db.complete_quest(q["id"])
         if q["repeat"] != "none":
-            self.feedback[q["id"]] = f"+{xp:g} XP — nice! See you {('next week' if q['repeat'] == 'weekly' else 'next month')}."
+            self.feedback[q["id"]] = tr("+{xp} XP — nice! See you next week.", xp=f"{xp:g}") \
+                if q["repeat"] == "weekly" else tr("+{xp} XP — nice! See you next month.", xp=f"{xp:g}")
             self._changed()
             return
         self._changed()
         self.app_page.show_dialog(ft.AlertDialog(
             title=ft.Row([ft.Icon(ft.Icons.EMOJI_EVENTS, color=GOLD, size=32),
-                          ft.Text("Quest complete!", weight=ft.FontWeight.BOLD)]),
-            content=ft.Text(f"'{q['title']}' joins your Hall of Fame. +{xp:g} XP"),
-            actions=[ft.Button("Awesome", on_click=lambda e: self.app_page.pop_dialog())],
+                          ft.Text(tr("Quest complete!"), weight=ft.FontWeight.BOLD)]),
+            content=ft.Text(tr("'{title}' joins your Hall of Fame. +{xp} XP", title=q["title"], xp=f"{xp:g}")),
+            actions=[ft.Button(tr("Awesome"), on_click=lambda e: self.app_page.pop_dialog())],
         ))
 
     def _next_step_card(self, q):
         qid = q["id"]
-        field = ft.TextField(value=q["next_step"], hint_text="What's the next small step?", dense=True,
+        field = ft.TextField(value=q["next_step"], hint_text=tr("What's the next small step?"), dense=True,
                              border=ft.InputBorder.NONE, expand=True, text_size=14)
         field.on_blur = lambda e: self._save(qid, next_step=(e.control.value or "").strip()) \
             if (e.control.value or "").strip() != q["next_step"] else None
         return ft.Container(
             content=ft.Row([ft.Icon(ft.Icons.BOOKMARK, color=ft.Colors.ORANGE_ACCENT),
-                            ft.Column([ft.Text("NEXT STEP", size=11, weight=ft.FontWeight.BOLD,
+                            ft.Column([ft.Text(tr("NEXT STEP"), size=11, weight=ft.FontWeight.BOLD,
                                                color=ft.Colors.ORANGE_ACCENT), field], spacing=0, expand=True)],
                            spacing=12),
             bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ORANGE), border_radius=10, padding=12,
@@ -528,17 +540,17 @@ class TodoView(ft.Row):
             rows.append(ft.Row([
                 cb,
                 ft.Text(f"+{XP_SUBQUEST:g}", size=10, color=ft.Colors.GREY_600),
-                ft.IconButton(ft.Icons.EDIT, icon_size=14, tooltip="Rename",
+                ft.IconButton(ft.Icons.EDIT, icon_size=14, tooltip=tr("Rename"),
                               on_click=lambda e, sub=s: self._rename_sub(sub)),
-                ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=14, tooltip="Move step up", disabled=i == 0,
+                ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=14, tooltip=tr("Move step up"), disabled=i == 0,
                               on_click=lambda e, sid=s["id"]: (db.move_subquest(sid, "up"), self.render())),
-                ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=14, tooltip="Move step down",
+                ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=14, tooltip=tr("Move step down"),
                               disabled=i == len(q["subquests"]) - 1,
                               on_click=lambda e, sid=s["id"]: (db.move_subquest(sid, "down"), self.render())),
-                ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=16, icon_color=ft.Colors.RED_300, tooltip="Delete step",
+                ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=16, icon_color=ft.Colors.RED_300, tooltip=tr("Delete step"),
                               on_click=lambda e, sid=s["id"]: (db.delete_subquest(sid), self._changed())),
             ], spacing=0))
-        new_f = ft.TextField(hint_text="Add a step…", dense=True, expand=True, text_size=13)
+        new_f = ft.TextField(hint_text=tr("Add a step…"), dense=True, expand=True, text_size=13)
 
         def add(e=None):
             if (new_f.value or "").strip():
@@ -547,22 +559,23 @@ class TodoView(ft.Row):
 
         new_f.on_submit = add
         if not rows:
-            rows.append(ft.Text("No steps yet. Break the quest into small actions — or let ✨ suggest some.",
+            rows.append(ft.Text(tr("No steps yet. Break the quest into small actions — or let ✨ suggest some."),
                                 size=12, color=ft.Colors.GREY_500, italic=True))
         if q["repeat"] != "none":
-            rows.insert(0, ft.Text(f"Steps reset {('every Monday' if q['repeat'] == 'weekly' else 'on the 1st of each month')}.",
+            rows.insert(0, ft.Text(tr("Steps reset every Monday.") if q["repeat"] == "weekly"
+                                   else tr("Steps reset on the 1st of each month."),
                                    size=11, color=ft.Colors.GREY_500))
-        suggest = ft.TextButton("Suggest steps", icon=ft.Icons.AUTO_AWESOME,
+        suggest = ft.TextButton(tr("Suggest steps"), icon=ft.Icons.AUTO_AWESOME,
                                 on_click=lambda e: open_quest_planner(self.app_page, lambda _id: self._changed(),
                                                                       existing=q))
-        return section(f"STEPS ({q['sub_done']}/{q['sub_total']})",
-                       rows + [ft.Row([new_f, ft.IconButton(ft.Icons.ADD, tooltip="Add step", on_click=add)])],
+        return section(tr("STEPS ({done}/{total})", done=q["sub_done"], total=q["sub_total"]),
+                       rows + [ft.Row([new_f, ft.IconButton(ft.Icons.ADD, tooltip=tr("Add step"), on_click=add)])],
                        trailing=suggest)
 
     def _toggle_sub(self, qid, sid, done):
         xp = db.set_subquest_done(sid, done)
         if xp:
-            self.feedback[qid] = f"Step done! +{xp:g} XP"
+            self.feedback[qid] = tr("Step done! +{xp} XP", xp=f"{xp:g}")
         self._changed()
 
     def _rename_sub(self, sub):
@@ -576,30 +589,30 @@ class TodoView(ft.Row):
 
         field.on_submit = save
         self.app_page.show_dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("Rename step"), content=ft.Container(field, width=420),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
-                     ft.Button("Save", on_click=save)]))
+            modal=True, title=ft.Text(tr("Rename step")), content=ft.Container(field, width=420),
+            actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: self.app_page.pop_dialog()),
+                     ft.Button(tr("Save"), on_click=save)]))
 
     # ------------------------------------------------------------ measurable target
     def _target_card(self, q):
         qid = q["id"]
         if not q["has_metric"]:
-            return section("TARGET", [
-                ft.Text("Is progress a number? (kg, books, km, money…) Track it here.", size=12,
+            return section(tr("TARGET"), [
+                ft.Text(tr("Is progress a number? (kg, books, km, money…) Track it here."), size=12,
                         color=ft.Colors.GREY_500),
-                ft.Row([ft.TextButton("Add a measurable target", icon=ft.Icons.ADD_CHART,
+                ft.Row([ft.TextButton(tr("Add a measurable target"), icon=ft.Icons.ADD_CHART,
                                       on_click=lambda e: self._edit_target(q))]),
             ])
         values = [e for e in reversed(db.get_quest_log(qid)) if e["value"] is not None][-12:]
         summary = ft.Row([
-            ft.Column([ft.Text("START", size=10, color=ft.Colors.GREY_500),
+            ft.Column([ft.Text(tr("START"), size=10, color=ft.Colors.GREY_500),
                        ft.Text(f"{fmt_num(q['metric_start'])} {q['metric_unit']}", size=15)], spacing=0),
             ft.Icon(ft.Icons.ARROW_FORWARD, color=ft.Colors.GREY_600, size=16),
-            ft.Column([ft.Text("NOW", size=10, color=ft.Colors.GREY_500),
+            ft.Column([ft.Text(tr("NOW"), size=10, color=ft.Colors.GREY_500),
                        ft.Text(f"{fmt_num(q['metric_current'])} {q['metric_unit']}", size=18,
                                weight=ft.FontWeight.BOLD, color=GOLD)], spacing=0),
             ft.Icon(ft.Icons.ARROW_FORWARD, color=ft.Colors.GREY_600, size=16),
-            ft.Column([ft.Text("TARGET", size=10, color=ft.Colors.GREY_500),
+            ft.Column([ft.Text(tr("TARGET"), size=10, color=ft.Colors.GREY_500),
                        ft.Text(f"{fmt_num(q['metric_target'])} {q['metric_unit']}", size=15)], spacing=0),
             ft.Container(expand=True),
             ft.Text(f"{q['metric_pct']:.0f}%", size=18, weight=ft.FontWeight.BOLD),
@@ -608,27 +621,28 @@ class TodoView(ft.Row):
         if values:
             controls.append(ft.Container(content=self._metric_chart(q, values), height=170))
         else:
-            controls.append(ft.Text("Log your first value below to start the chart.", size=12, color=ft.Colors.GREY_500))
+            controls.append(ft.Text(tr("Log your first value below to start the chart."), size=12, color=ft.Colors.GREY_500))
         if q["status"] != "Complete":
-            value_f = ft.TextField(label=f"New value ({q['metric_unit']})", dense=True, width=170)
-            note_f = ft.TextField(label="Note (optional)", dense=True, expand=True)
+            value_f = ft.TextField(label=tr("New value ({unit})", unit=q["metric_unit"]), dense=True, width=170)
+            note_f = ft.TextField(label=tr("Note (optional)"), dense=True, expand=True)
             error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
             def log_value(e=None):
                 value = parse_number(value_f.value)
                 if value is None:
-                    error.value = "Type a number."
+                    error.value = tr("Type a number.")
                     self._update()
                     return
                 xp = db.add_quest_log(qid, (note_f.value or "").strip(), value=value)
-                self.feedback[qid] = f"Logged {fmt_num(value)} {q['metric_unit']}" + (f" • +{xp:g} XP" if xp else "")
+                self.feedback[qid] = tr("Logged {value} {unit}", value=fmt_num(value), unit=q["metric_unit"]) + \
+                    (f" • +{xp:g} XP" if xp else "")
                 self._changed()
 
             value_f.on_submit = log_value
-            controls += [ft.Row([value_f, note_f, ft.Button("Log value", icon=ft.Icons.ADD, on_click=log_value)],
+            controls += [ft.Row([value_f, note_f, ft.Button(tr("Log value"), icon=ft.Icons.ADD, on_click=log_value)],
                                 spacing=8), error]
-        edit = ft.TextButton("Edit target", icon=ft.Icons.TUNE, on_click=lambda e: self._edit_target(q))
-        return section("TARGET", controls, trailing=edit)
+        edit = ft.TextButton(tr("Edit target"), icon=ft.Icons.TUNE, on_click=lambda e: self._edit_target(q))
+        return section(tr("TARGET"), controls, trailing=edit)
 
     def _metric_chart(self, q, values):
         nums = [e["value"] for e in values] + [q["metric_start"], q["metric_target"]]
@@ -656,17 +670,17 @@ class TodoView(ft.Row):
         )
 
     def _edit_target(self, q):
-        unit_f = ft.TextField(label="Unit (kg, books, km, R$…)", value=q["metric_unit"], dense=True)
-        start_f = ft.TextField(label="Start value", value=fmt_num(q["metric_start"]) if q["metric_start"] is not None
+        unit_f = ft.TextField(label=tr("Unit (kg, books, km, R$…)"), value=q["metric_unit"], dense=True)
+        start_f = ft.TextField(label=tr("Start value"), value=fmt_num(q["metric_start"]) if q["metric_start"] is not None
                                else "", dense=True, width=150)
-        target_f = ft.TextField(label="Target value", value=fmt_num(q["metric_target"]) if q["metric_target"] is not None
+        target_f = ft.TextField(label=tr("Target value"), value=fmt_num(q["metric_target"]) if q["metric_target"] is not None
                                 else "", dense=True, width=150)
         error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
         def save(e):
             start, target = parse_number(start_f.value), parse_number(target_f.value)
             if not (unit_f.value or "").strip() or start is None or target is None or start == target:
-                error.value = "Fill the unit and two different numbers."
+                error.value = tr("Fill the unit and two different numbers.")
                 self._update()
                 return
             db.update_quest(q["id"], metric_unit=unit_f.value.strip(), metric_start=start, metric_target=target)
@@ -678,16 +692,16 @@ class TodoView(ft.Row):
             self.app_page.pop_dialog()
             self._changed()
 
-        actions = [ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
-                   ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]
+        actions = [ft.TextButton(tr("Cancel"), on_click=lambda e: self.app_page.pop_dialog()),
+                   ft.Button(tr("Save"), icon=ft.Icons.CHECK, on_click=save)]
         if q["has_metric"]:
-            actions.insert(0, ft.TextButton("Remove target", icon=ft.Icons.DELETE_OUTLINE,
+            actions.insert(0, ft.TextButton(tr("Remove target"), icon=ft.Icons.DELETE_OUTLINE,
                                             icon_color=ft.Colors.RED_300, on_click=remove))
         self.app_page.show_dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("Measurable target", weight=ft.FontWeight.BOLD),
+            modal=True, title=ft.Text(tr("Measurable target"), weight=ft.FontWeight.BOLD),
             content=ft.Container(width=420, content=ft.Column([
-                ft.Text("Works both ways: 82 → 77 kg (going down) or 0 → 12 books (going up). "
-                        "Logged values keep their history.", size=12, color=ft.Colors.GREY_400),
+                ft.Text(tr("Works both ways: 82 → 77 kg (going down) or 0 → 12 books (going up). "
+                        "Logged values keep their history."), size=12, color=ft.Colors.GREY_400),
                 unit_f, ft.Row([start_f, target_f], spacing=10), error],
                 spacing=12, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
             actions=actions))
@@ -696,36 +710,38 @@ class TodoView(ft.Row):
     def _log_card(self, q):
         qid = q["id"]
         draft = self.drafts.setdefault(qid, {"text": "", "next_step": ""})
-        text_f = ft.TextField(value=draft["text"], label="What did you do? Progress, ideas, blockers…",
+        text_f = ft.TextField(value=draft["text"], label=tr("What did you do? Progress, ideas, blockers…"),
                               multiline=True, min_lines=2, max_lines=8, text_size=13)
         text_f.on_change = lambda e: draft.update(text=e.control.value or "")
-        next_f = ft.TextField(label="Next step (updates the bookmark)", value=draft["next_step"], dense=True)
+        next_f = ft.TextField(label=tr("Next step (updates the bookmark)"), value=draft["next_step"], dense=True)
         next_f.on_change = lambda e: draft.update(next_step=e.control.value or "")
         msg = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
         def log(e):
             text = (text_f.value or "").strip()
             if not text:
-                msg.value = "Write something first."
+                msg.value = tr("Write something first.")
                 self._update()
                 return
             xp = db.add_quest_log(qid, text, next_step=(next_f.value or "").strip())
             self.drafts.pop(qid, None)
-            self.feedback[qid] = f"Logged! +{xp:g} XP" if xp else (
-                f"Logged (write {db.QUEST_LOG_MIN_CHARS}+ characters to earn XP)." if len(text) < db.QUEST_LOG_MIN_CHARS
-                else "Logged (today's log XP for this quest already earned).")
+            self.feedback[qid] = tr("Logged! +{xp} XP", xp=f"{xp:g}") if xp else (
+                tr("Logged (write {n}+ characters to earn XP).", n=db.QUEST_LOG_MIN_CHARS)
+                if len(text) < db.QUEST_LOG_MIN_CHARS
+                else tr("Logged (today's log XP for this quest already earned)."))
             self._changed()
 
         entries = db.get_quest_log(qid)
         entry_rows = [self._entry_row(q, en) for en in entries] or [
-            ft.Text("No entries yet — a line per session is enough.", size=12, color=ft.Colors.GREY_500, italic=True)]
+            ft.Text(tr("No entries yet — a line per session is enough."), size=12, color=ft.Colors.GREY_500, italic=True)]
         controls = []
         if q["status"] != "Complete":
             controls += [text_f, ft.Row([ft.Container(content=next_f, expand=True),
-                                         ft.Button(f"Log (+{XP_QUEST_LOG:g} XP)", icon=ft.Icons.ADD, on_click=log)],
+                                         ft.Button(tr("Log (+{xp} XP)", xp=f"{XP_QUEST_LOG:g}"), icon=ft.Icons.ADD,
+                                                   on_click=log)],
                                         spacing=8), msg]
         controls += entry_rows
-        return section(f"QUEST LOG ({len(entries)})", controls)
+        return section(tr("QUEST LOG ({n})", n=len(entries)), controls)
 
     def _entry_row(self, q, en):
         unit = q["metric_unit"]
@@ -734,10 +750,11 @@ class TodoView(ft.Row):
         if en["value"] is not None:
             head.insert(1, badge(f"{fmt_num(en['value'])} {unit}".strip(), GOLD, size=11))
         head += [
-            ft.IconButton(ft.Icons.EDIT, icon_size=14, tooltip="Edit entry", on_click=lambda e: self._edit_entry(q, en)),
-            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=14, icon_color=ft.Colors.RED_300, tooltip="Delete entry",
-                          on_click=lambda e: confirm_action(self.app_page, "Delete log entry?",
-                                                            f"The entry from {fmt_day(en['entry_date'])} will be removed.",
+            ft.IconButton(ft.Icons.EDIT, icon_size=14, tooltip=tr("Edit entry"), on_click=lambda e: self._edit_entry(q, en)),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=14, icon_color=ft.Colors.RED_300, tooltip=tr("Delete entry"),
+                          on_click=lambda e: confirm_action(self.app_page, tr("Delete log entry?"),
+                                                            tr("The entry from {date} will be removed.",
+                                                               date=fmt_day(en["entry_date"])),
                                                             lambda: (db.delete_quest_log(en["id"]), self._changed()))),
         ]
         lines = [ft.Row(head, spacing=6)]
@@ -747,10 +764,10 @@ class TodoView(ft.Row):
                             border_radius=8, padding=ft.Padding.only(left=10, right=4, top=2, bottom=8))
 
     def _edit_entry(self, q, en):
-        text_f = ft.TextField(label="Entry", value=en["text"], multiline=True, min_lines=3, max_lines=10)
-        value_f = ft.TextField(label=f"Value ({q['metric_unit']})", value=fmt_num(en["value"]) if en["value"] is not None
+        text_f = ft.TextField(label=tr("Entry"), value=en["text"], multiline=True, min_lines=3, max_lines=10)
+        value_f = ft.TextField(label=tr("Value ({unit})", unit=q["metric_unit"]), value=fmt_num(en["value"]) if en["value"] is not None
                                else "", dense=True, width=160, visible=q["has_metric"] or en["value"] is not None)
-        date_f = ft.TextField(label="Date", value=f"{date.fromisoformat(en['entry_date']):%d/%m/%Y}", dense=True,
+        date_f = ft.TextField(label=tr("Date"), value=f"{date.fromisoformat(en['entry_date']):%d/%m/%Y}", dense=True,
                               width=140)
         error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
@@ -759,7 +776,7 @@ class TodoView(ft.Row):
             value = parse_number(value_f.value) if (value_f.value or "").strip() else None
             if not d or ((value_f.value or "").strip() and value is None) or \
                     (not (text_f.value or "").strip() and value is None):
-                error.value = "Check the date (DD/MM/YYYY), the value, and that the entry isn't empty."
+                error.value = tr("Check the date (DD/MM/YYYY), the value, and that the entry isn't empty.")
                 self._update()
                 return
             db.update_quest_log(en["id"], (text_f.value or "").strip(), value, d.isoformat())
@@ -767,17 +784,17 @@ class TodoView(ft.Row):
             self._changed()
 
         self.app_page.show_dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("Edit log entry", weight=ft.FontWeight.BOLD),
+            modal=True, title=ft.Text(tr("Edit log entry"), weight=ft.FontWeight.BOLD),
             content=ft.Container(width=500, content=ft.Column([text_f, ft.Row([value_f, date_f], spacing=10), error],
                                                               spacing=12, tight=True,
                                                               horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app_page.pop_dialog()),
-                     ft.Button("Save", icon=ft.Icons.CHECK, on_click=save)]))
+            actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: self.app_page.pop_dialog()),
+                     ft.Button(tr("Save"), icon=ft.Icons.CHECK, on_click=save)]))
 
     # ------------------------------------------------------------ description
     def _description_card(self, q):
-        field = ft.TextField(value=q["notes"], hint_text="Why this quest matters, links, references, ideas…",
+        field = ft.TextField(value=q["notes"], hint_text=tr("Why this quest matters, links, references, ideas…"),
                              multiline=True, min_lines=3, max_lines=None, text_size=13)
         field.on_blur = lambda e: self._save(q["id"], notes=e.control.value or "") \
             if (e.control.value or "") != q["notes"] else None
-        return section("DESCRIPTION & NOTES", [field], color=ft.Colors.GREY_400)
+        return section(tr("DESCRIPTION & NOTES"), [field], color=ft.Colors.GREY_400)

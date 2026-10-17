@@ -15,6 +15,7 @@ import ai_gemini
 import database as db
 from constants import XP_DIARY_EXERCISE, DIARY_XP_EXERCISES_PER_DAY, DIARY_EXERCISE_MIN_CHARS
 from ui_helpers import confirm_action, update_ui
+from i18n import tr, trn, day_short, fmt_long, fmt_month_year, fmt_short
 
 UNLOCK_MINUTES = 15          # stays open while you use it (every action extends it)
 ACCENT = ft.Colors.PINK_ACCENT_100
@@ -82,11 +83,11 @@ class _Lock:
 LOCK = _Lock()
 
 
-def ask_pin(page: ft.Page, on_ok, title="Unlock your diary"):
+def ask_pin(page: ft.Page, on_ok, title=None):
     if LOCK.unlocked():
         on_ok()
         return
-    pin_f = ft.TextField(label="PIN", password=True, can_reveal_password=True, autofocus=True, dense=True,
+    pin_f = ft.TextField(label=tr("PIN"), password=True, can_reveal_password=True, autofocus=True, dense=True,
                          keyboard_type=ft.KeyboardType.NUMBER)
     error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
@@ -96,18 +97,19 @@ def ask_pin(page: ft.Page, on_ok, title="Unlock your diary"):
             page.pop_dialog()
             on_ok()
         else:
-            error.value = "Wrong PIN."
+            error.value = tr("Wrong PIN.")
             pin_f.value = ""
             page.update()
 
     pin_f.on_submit = submit
     page.show_dialog(ft.AlertDialog(
-        modal=True, title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE), ft.Text(title, weight=ft.FontWeight.BOLD)]),
+        modal=True, title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE),
+                                  ft.Text(title or tr("Unlock your diary"), weight=ft.FontWeight.BOLD)]),
         content=ft.Container(width=320, content=ft.Column(
-            [ft.Text(f"It stays open while you use it (locks after {UNLOCK_MINUTES} quiet minutes).", size=12,
+            [ft.Text(tr("It stays open while you use it (locks after {n} quiet minutes).", n=UNLOCK_MINUTES), size=12,
                      color=ft.Colors.GREY_400), pin_f, error], spacing=10, tight=True)),
-        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                 ft.Button("Unlock", icon=ft.Icons.LOCK_OPEN, on_click=submit)]))
+        actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: page.pop_dialog()),
+                 ft.Button(tr("Unlock"), icon=ft.Icons.LOCK_OPEN, on_click=submit)]))
 
 
 def open_habit_note(page: ft.Page, activity_id: int, habit: str, day: date, status: str = "-",
@@ -116,12 +118,12 @@ def open_habit_note(page: ft.Page, activity_id: int, habit: str, day: date, stat
     existing = db.get_habit_note(activity_id, day) if LOCK.unlocked() else None
     if existing is None and db.habit_note_flags(day, day).get((activity_id, day.isoformat())) is not None:
         ask_pin(page, lambda: open_habit_note(page, activity_id, habit, day, status, on_saved, on_close),
-                title="Unlock to read this note")
+                title=tr("Unlock to read this note"))
         return
     existing = existing or {"note": "", "highlight": False}
     note_f = ft.TextField(value=existing["note"], multiline=True, min_lines=4, max_lines=10, autofocus=True,
-                          hint_text="What made it special? How did it feel?", text_size=14)
-    star = ft.Checkbox(label="⭐ Highlight — show it in the Diary's highlights", value=existing["highlight"]
+                          hint_text=tr("What made it special? How did it feel?"), text_size=14)
+    star = ft.Checkbox(label=tr("⭐ Highlight — show it in the Diary's highlights"), value=existing["highlight"]
                        or (not existing["note"] and status == "Excellent"))
 
     def close(e=None):
@@ -142,28 +144,28 @@ def open_habit_note(page: ft.Page, activity_id: int, habit: str, day: date, stat
         if on_saved:
             on_saved()
 
-    label = f"{habit} · {DAY_LABEL(day)}" + (f" · {status}" if status not in ("-", None) else "")
+    label = f"{habit} · {DAY_LABEL(day)}" + (f" · {tr(status)}" if status not in ("-", None) else "")
     page.show_dialog(ft.AlertDialog(
         modal=True,
         title=ft.Row([ft.Icon(ft.Icons.EDIT_NOTE, color=ACCENT), ft.Text(label, weight=ft.FontWeight.BOLD,
                                                                           size=16, expand=True)]),
         content=ft.Container(width=520, content=ft.Column([
             note_f, star,
-            ft.Text("It also appears on that day's Diary page. Encrypted like the rest of the diary.",
+            ft.Text(tr("It also appears on that day's Diary page. Encrypted like the rest of the diary."),
                     size=11, color=ft.Colors.GREY_500)], tight=True, spacing=10,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-        actions=[ft.TextButton("Delete note", icon=ft.Icons.DELETE_OUTLINE, on_click=remove,
+        actions=[ft.TextButton(tr("Delete note"), icon=ft.Icons.DELETE_OUTLINE, on_click=remove,
                                visible=bool(existing["note"])),
-                 ft.TextButton("Cancel", on_click=close),
-                 ft.Button("Save", icon=ft.Icons.SAVE, on_click=save)]))
+                 ft.TextButton(tr("Cancel"), on_click=close),
+                 ft.Button(tr("Save"), icon=ft.Icons.SAVE, on_click=save)]))
 
 
 def DAY_LABEL(d: date) -> str:  # noqa: N802 - small formatting helper used like a constant
     if d == date.today():
-        return "today"
+        return tr("today")
     if d == date.today() - timedelta(days=1):
-        return "yesterday"
-    return f"{d:%a %d/%m/%Y}"
+        return tr("yesterday")
+    return fmt_short(d)
 
 
 class DiaryView(ft.Row):
@@ -197,7 +199,7 @@ class DiaryView(ft.Row):
 
     def _card(self, title, controls, icon=None, trailing=None):
         head = [ft.Icon(icon, size=18, color=ACCENT)] if icon else []
-        head.append(ft.Text(title, size=15, weight=ft.FontWeight.BOLD, expand=True))
+        head.append(ft.Text(tr(title), size=15, weight=ft.FontWeight.BOLD, expand=True))
         if trailing:
             head.append(trailing)
         return ft.Container(content=ft.Column([ft.Row(head, spacing=8), *controls], spacing=10,
@@ -209,7 +211,7 @@ class DiaryView(ft.Row):
         if self.body_dirty and self.body_field is not None:
             db.save_diary_entry(self.selected_day, body=self.body_field.value or "")
             self.body_dirty = False
-            self.save_status = f"Saved {datetime.now():%H:%M}"
+            self.save_status = tr("Saved {time}", time=f"{datetime.now():%H:%M}")
 
     # ------------------------------------------------------------ actions
     def go_to(self, day: date):
@@ -281,18 +283,20 @@ class DiaryView(ft.Row):
     # exercises ----------------------------------------------------
     def open_exercise(self, kind, existing=None):
         title, icon, intro, spec = EXERCISES[kind]
+        title = tr(title)
         values = (existing or {}).get("fields", {})
         inputs = {}
-        controls = [ft.Text(intro, size=13, color=ft.Colors.GREY_300)]
+        controls = [ft.Text(tr(intro), size=13, color=ft.Colors.GREY_300)]
         for name, label, hint, lines in spec:
-            inputs[name] = ft.TextField(label=label, hint_text=hint or None, value=values.get(name, ""),
+            inputs[name] = ft.TextField(label=tr(label), hint_text=tr(hint) if hint else None, value=values.get(name, ""),
                                         multiline=lines > 1, min_lines=lines, max_lines=max(lines, 3) * 3,
                                         text_size=14)
             controls.append(inputs[name])
         rewarded = existing is None
         if rewarded:
-            controls.append(ft.Text(f"+{XP_DIARY_EXERCISE:g} XP when you write at least {DIARY_EXERCISE_MIN_CHARS} "
-                                    f"characters (each kind once a day, up to {DIARY_XP_EXERCISES_PER_DAY} a day).",
+            controls.append(ft.Text(tr("+{xp} XP when you write at least {n} characters (each kind once a day, up to "
+                                       "{max} a day).", xp=f"{XP_DIARY_EXERCISE:g}", n=DIARY_EXERCISE_MIN_CHARS,
+                                       max=DIARY_XP_EXERCISES_PER_DAY),
                                     size=11, color=ft.Colors.GREY_500))
         page = self.app_page
 
@@ -304,10 +308,10 @@ class DiaryView(ft.Row):
             LOCK.touch()
             if existing:
                 db.update_diary_exercise(existing["id"], fields)
-                self.message = f"{title} updated."
+                self.message = tr("{title} updated.", title=title)
             else:
                 xp = db.add_diary_exercise(self.selected_day, kind, fields)
-                self.message = f"{title} saved" + (f" · +{xp:g} XP 🌱" if xp else ".")
+                self.message = tr("{title} saved", title=title) + (f" · +{xp:g} XP 🌱" if xp else ".")
             page.pop_dialog()
             self.render()
 
@@ -317,16 +321,16 @@ class DiaryView(ft.Row):
             content=ft.Container(width=640, content=ft.Column(
                 controls, tight=True, spacing=12, scroll=ft.ScrollMode.AUTO,
                 horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                     ft.Button("Save", icon=ft.Icons.SAVE, on_click=save)]))
+            actions=[ft.TextButton(tr("Cancel"), on_click=lambda e: page.pop_dialog()),
+                     ft.Button(tr("Save"), icon=ft.Icons.SAVE, on_click=save)]))
 
     def _delete_exercise(self, ex):
         def done():
             db.delete_diary_exercise(ex["id"])
             self.render()
-        confirm_action(self.app_page, "Delete exercise?",
-                       f"'{EXERCISE_TITLES.get(ex['kind'], ex['kind'])}' of {DAY_LABEL(self.selected_day)} "
-                       "will be deleted for good.", done)
+        confirm_action(self.app_page, tr("Delete exercise?"),
+                       tr("'{title}' of {day} will be deleted for good.",
+                          title=tr(EXERCISE_TITLES.get(ex["kind"], ex["kind"])), day=DAY_LABEL(self.selected_day)), done)
 
     # reflection ---------------------------------------------------
     def _ask_reflection(self, e=None):
@@ -344,7 +348,7 @@ class DiaryView(ft.Row):
             except ai_gemini.AIError as exc:
                 self.ai_error = str(exc)
             except Exception as exc:  # never leave the spinner running
-                self.ai_error = f"Something went wrong: {exc}"
+                self.ai_error = tr("Something went wrong: {error}", error=exc)
             self.ai_busy = False
             if self.visible and self.selected_day == day:
                 self.render()
@@ -362,20 +366,20 @@ class DiaryView(ft.Row):
         page.show_dialog(ft.AlertDialog(
             modal=True,
             title=ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=ACCENT),
-                          ft.Text("Before the first reflection", weight=ft.FontWeight.BOLD)]),
+                          ft.Text(tr("Before the first reflection"), weight=ft.FontWeight.BOLD)]),
             content=ft.Container(width=520, content=ft.Column([
-                ft.Text("Only when you click, the selected day's page, exercises, habit notes, habit answers and "
+                ft.Text(tr("Only when you click, the selected day's page, exercises, habit notes, habit answers and "
                         "mood are sent to Google's Gemini for an honest, impartial reflection — it will point out "
-                        "patterns and your own part in things, not just comfort you. Nothing is sent automatically.",
+                        "patterns and your own part in things, not just comfort you. Nothing is sent automatically."),
                         size=13),
-                ft.Text("On Gemini's free tier, Google may use that text to improve its products. Skip this for "
-                        "anything you wouldn't want to leave your computer.", size=13, color=ft.Colors.AMBER_200),
-                ft.Text("The reflection is not therapy or medical advice. If you're struggling, talking to someone "
-                        "you trust or a professional helps — in Brazil, CVV answers 24h at 188 (free).",
+                ft.Text(tr("On Gemini's free tier, Google may use that text to improve its products. Skip this for "
+                        "anything you wouldn't want to leave your computer."), size=13, color=ft.Colors.AMBER_200),
+                ft.Text(tr("The reflection is not therapy or medical advice. If you're struggling, talking to someone "
+                        "you trust or a professional helps — in Brazil, CVV answers 24h at 188 (free)."),
                         size=12, color=ft.Colors.GREY_400),
             ], tight=True, spacing=10)),
-            actions=[ft.TextButton("Not now", on_click=lambda e: page.pop_dialog()),
-                     ft.Button("I understand, continue", icon=ft.Icons.AUTO_AWESOME, on_click=agree)]))
+            actions=[ft.TextButton(tr("Not now"), on_click=lambda e: page.pop_dialog()),
+                     ft.Button(tr("I understand, continue"), icon=ft.Icons.AUTO_AWESOME, on_click=agree)]))
 
     def _clear_reflection(self, e=None):
         db.set_diary_reflection(self.selected_day, "")
@@ -385,39 +389,39 @@ class DiaryView(ft.Row):
     def open_settings(self, e=None):
         page = self.app_page
         has_pin = db.has_diary_pin()
-        pin1 = ft.TextField(label="New PIN (4+ digits)", password=True, can_reveal_password=True, dense=True,
+        pin1 = ft.TextField(label=tr("New PIN (4+ digits)"), password=True, can_reveal_password=True, dense=True,
                             keyboard_type=ft.KeyboardType.NUMBER)
-        pin2 = ft.TextField(label="Repeat the PIN", password=True, can_reveal_password=True, dense=True,
+        pin2 = ft.TextField(label=tr("Repeat the PIN"), password=True, can_reveal_password=True, dense=True,
                             keyboard_type=ft.KeyboardType.NUMBER)
-        current = ft.TextField(label="Current PIN", password=True, can_reveal_password=True, dense=True,
+        current = ft.TextField(label=tr("Current PIN"), password=True, can_reveal_password=True, dense=True,
                                keyboard_type=ft.KeyboardType.NUMBER, visible=has_pin)
         error = ft.Text("", size=12, color=ft.Colors.RED_ACCENT)
 
         def save(e=None):
             if has_pin and not db.check_diary_pin(current.value or ""):
-                error.value = "The current PIN is wrong."
+                error.value = tr("The current PIN is wrong.")
             elif len(pin1.value or "") < 4 or not (pin1.value or "").isdigit():
-                error.value = "Use at least 4 digits."
+                error.value = tr("Use at least 4 digits.")
             elif pin1.value != pin2.value:
-                error.value = "The PINs don't match."
+                error.value = tr("The PINs don't match.")
             else:
                 self.save_draft()
                 db.set_diary_pin(pin1.value)
                 LOCK.unlock()
                 page.pop_dialog()
-                self.message = "PIN saved. Your diary locks after 15 quiet minutes (or with the lock button)."
+                self.message = tr("PIN saved. Your diary locks after 15 quiet minutes (or with the lock button).")
                 self.render()
                 return
             page.update()
 
         def remove(e=None):
             if not db.check_diary_pin(current.value or ""):
-                error.value = "Type the current PIN to remove it."
+                error.value = tr("Type the current PIN to remove it.")
                 page.update()
                 return
             db.remove_diary_pin()
             page.pop_dialog()
-            self.message = "PIN removed."
+            self.message = tr("PIN removed.")
             self.render()
 
         def forgot(e=None):
@@ -426,41 +430,41 @@ class DiaryView(ft.Row):
             def wipe():
                 db.reset_diary_pin_and_wipe_text()
                 LOCK.lock()
-                self.message = "PIN removed and the diary's texts erased. Moods were kept."
+                self.message = tr("PIN removed and the diary's texts erased. Moods were kept.")
                 self.render()
-            confirm_action(page, "Forgot the PIN?",
-                           "Without the PIN the diary can't be opened. Removing it ERASES every text in the diary "
+            confirm_action(page, tr("Forgot the PIN?"),
+                           tr("Without the PIN the diary can't be opened. Removing it ERASES every text in the diary "
                            "(pages, exercises, habit notes and reflections); moods and earned XP stay. "
-                           "This can't be undone.", wipe, confirm_label="Erase texts and remove PIN")
+                           "This can't be undone."), wipe, confirm_label=tr("Erase texts and remove PIN"))
 
         page.show_dialog(ft.AlertDialog(
             modal=True,
-            title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE), ft.Text("Diary privacy", weight=ft.FontWeight.BOLD)]),
+            title=ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE), ft.Text(tr("Diary privacy"), weight=ft.FontWeight.BOLD)]),
             content=ft.Container(width=420, content=ft.Column([
-                ft.Text("Everything you write is encrypted on this computer. A PIN also hides the diary until "
-                        "you unlock it.", size=12, color=ft.Colors.GREY_400),
+                ft.Text(tr("Everything you write is encrypted on this computer. A PIN also hides the diary until "
+                        "you unlock it."), size=12, color=ft.Colors.GREY_400),
                 current, pin1, pin2, error,
-                ft.Text("There is no way to recover a forgotten PIN without erasing the diary's texts.",
+                ft.Text(tr("There is no way to recover a forgotten PIN without erasing the diary's texts."),
                         size=11, color=ft.Colors.AMBER_200),
             ], tight=True, spacing=10)),
-            actions=[ft.TextButton("Forgot PIN", on_click=forgot, visible=has_pin),
-                     ft.TextButton("Remove PIN", on_click=remove, visible=has_pin),
-                     ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                     ft.Button("Save PIN", icon=ft.Icons.SAVE, on_click=save)]))
+            actions=[ft.TextButton(tr("Forgot PIN"), on_click=forgot, visible=has_pin),
+                     ft.TextButton(tr("Remove PIN"), on_click=remove, visible=has_pin),
+                     ft.TextButton(tr("Cancel"), on_click=lambda e: page.pop_dialog()),
+                     ft.Button(tr("Save PIN"), icon=ft.Icons.SAVE, on_click=save)]))
 
     # ------------------------------------------------------------ render
     def render(self):
         if not LOCK.unlocked():
             self.body_field = None
             self.sidebar.controls = [ft.Row([ft.Icon(ft.Icons.MENU_BOOK, color=ACCENT, size=24),
-                                             ft.Text("Diary", size=18, weight=ft.FontWeight.BOLD)])]
+                                             ft.Text(tr("Diary"), size=18, weight=ft.FontWeight.BOLD)])]
             self.workspace.controls = [ft.Container(
                 content=ft.Column([
                     ft.Icon(ft.Icons.LOCK_OUTLINE, size=56, color=ACCENT),
-                    ft.Text("Your diary is locked", size=20, weight=ft.FontWeight.BOLD),
-                    ft.Text("Notes from the Schedule can still be written without unlocking.", size=12,
+                    ft.Text(tr("Your diary is locked"), size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(tr("Notes from the Schedule can still be written without unlocking."), size=12,
                             color=ft.Colors.GREY_400),
-                    ft.Button("Unlock", icon=ft.Icons.LOCK_OPEN, on_click=self._unlock),
+                    ft.Button(tr("Unlock"), icon=ft.Icons.LOCK_OPEN, on_click=self._unlock),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
                 alignment=ft.Alignment.CENTER, padding=80)]
             self._update()
@@ -473,14 +477,14 @@ class DiaryView(ft.Row):
         has_pin = db.has_diary_pin()
         controls = [
             ft.Row([ft.Icon(ft.Icons.MENU_BOOK, color=ACCENT, size=24),
-                    ft.Text("Diary", size=18, weight=ft.FontWeight.BOLD, expand=True),
-                    ft.IconButton(ft.Icons.LOCK_OUTLINE, tooltip="Lock now", visible=has_pin,
+                    ft.Text(tr("Diary"), size=18, weight=ft.FontWeight.BOLD, expand=True),
+                    ft.IconButton(ft.Icons.LOCK_OUTLINE, tooltip=tr("Lock now"), visible=has_pin,
                                   on_click=self._lock_now),
-                    ft.IconButton(ft.Icons.SETTINGS_OUTLINED, tooltip="Privacy & PIN", on_click=self.open_settings)]),
+                    ft.IconButton(ft.Icons.SETTINGS_OUTLINED, tooltip=tr("Privacy & PIN"), on_click=self.open_settings)]),
             self._calendar(),
-            ft.TextField(value=self.search_text, hint_text="Search the diary…", dense=True, text_size=13,
+            ft.TextField(value=self.search_text, hint_text=tr("Search the diary…"), dense=True, text_size=13,
                          prefix_icon=ft.Icons.SEARCH, on_submit=lambda e: self._search(e.control.value),
-                         suffix=ft.IconButton(ft.Icons.CLOSE, icon_size=16, tooltip="Clear search",
+                         suffix=ft.IconButton(ft.Icons.CLOSE, icon_size=16, tooltip=tr("Clear search"),
                                               on_click=lambda e: self._search(""),
                                               visible=bool(self.search_text))),
         ]
@@ -496,15 +500,16 @@ class DiaryView(ft.Row):
         info = db.diary_month(first, last)
         today = date.today()
         header = ft.Row([
-            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_size=18, tooltip="Previous month",
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_size=18, tooltip=tr("Previous month"),
                           on_click=lambda e: self._shift_month(-1)),
-            ft.Text(f"{first:%B %Y}", weight=ft.FontWeight.BOLD, expand=True, text_align=ft.TextAlign.CENTER),
-            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_size=18, tooltip="Next month",
+            ft.Text(fmt_month_year(first), weight=ft.FontWeight.BOLD, expand=True, text_align=ft.TextAlign.CENTER),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_size=18, tooltip=tr("Next month"),
                           disabled=last >= today, on_click=lambda e: self._shift_month(1)),
-            ft.TextButton("Today", on_click=lambda e: self.go_to(date.today())),
+            ft.TextButton(tr("Today"), on_click=lambda e: self.go_to(date.today())),
         ], spacing=0)
         week = ft.Row([ft.Container(ft.Text(n, size=10, color=ft.Colors.GREY_500), width=38,
-                                    alignment=ft.Alignment.CENTER) for n in "MTWTFSS"], spacing=4)
+                                    alignment=ft.Alignment.CENTER) for n in (day_short(i)[0] for i in range(7))],
+                      spacing=4)
         rows = [header, week]
         cells = [ft.Container(width=38, height=40) for _ in range(first.weekday())]
         d = first
@@ -517,10 +522,11 @@ class DiaryView(ft.Row):
                 mark = MOOD_EMOJI.get(i["mood"], "") or ("⭐" if i["highlight"] else "•")
             tip = None
             if i:
-                bits = [f"mood {MOOD_EMOJI[i['mood']]}" if i["mood"] else "", "page" if i["written"] else "",
-                        f"{i['exercises']} exercise(s)" if i["exercises"] else "",
-                        f"{i['notes']} habit note(s)" if i["notes"] else ""]
-                tip = f"{d:%a %d/%m}: " + ", ".join(b for b in bits if b)
+                bits = [tr("mood {emoji}", emoji=MOOD_EMOJI[i["mood"]]) if i["mood"] else "",
+                        tr("page") if i["written"] else "",
+                        tr("{n} exercise(s)", n=i["exercises"]) if i["exercises"] else "",
+                        tr("{n} habit note(s)", n=i["notes"]) if i["notes"] else ""]
+                tip = f"{fmt_short(d, year=False)}: " + ", ".join(b for b in bits if b)
             cells.append(ft.Container(
                 content=ft.Column([
                     ft.Text(str(d.day), size=12, weight=ft.FontWeight.BOLD if d == today else None,
@@ -560,38 +566,39 @@ class DiaryView(ft.Row):
                 continue
             preview = (MOOD_EMOJI.get(entry["mood"], "") + " " + text.replace("\n", " ")).strip()
             out.append(ft.Container(
-                content=ft.Column([ft.Text(f"{label} · {past:%d/%m/%Y}", size=11, color=ACCENT),
+                content=ft.Column([ft.Text(f"{tr(label)} · {past:%d/%m/%Y}", size=11, color=ACCENT),
                                    ft.Text(preview[:140] + ("…" if len(preview) > 140 else ""), size=12,
                                            color=ft.Colors.GREY_300)], spacing=2),
                 padding=10, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, ink=True,
                 on_click=lambda e, d=past: self.go_to(d)))
         if out:
-            out.insert(0, ft.Text("On this day", size=13, weight=ft.FontWeight.BOLD))
+            out.insert(0, ft.Text(tr("On this day"), size=13, weight=ft.FontWeight.BOLD))
 
         highlights = db.get_habit_notes(highlights_only=True, limit=12)
         if highlights:
-            out.append(ft.Text("⭐ Highlights", size=13, weight=ft.FontWeight.BOLD))
+            out.append(ft.Text(tr("⭐ Highlights"), size=13, weight=ft.FontWeight.BOLD))
             for h in highlights:
                 d = date.fromisoformat(h["date"])
                 out.append(ft.Container(
                     content=ft.Column([
-                        ft.Text(f"{h['habit']} · {d:%d/%m/%Y}" + (f" · {h['status']}" if h["status"] != "-" else ""),
+                        ft.Text(f"{h['habit']} · {d:%d/%m/%Y}" + (f" · {tr(h['status'])}" if h["status"] != "-" else ""),
                                 size=11, color=ft.Colors.AMBER_200),
                         ft.Text(h["note"][:120] + ("…" if len(h["note"]) > 120 else ""), size=12)], spacing=2),
                     padding=10, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, ink=True,
                     on_click=lambda e, d=d: self.go_to(d)))
         if not out:
-            out.append(ft.Text("Highlights and memories from past days will show up here.", size=12,
+            out.append(ft.Text(tr("Highlights and memories from past days will show up here."), size=12,
                                color=ft.Colors.GREY_500))
         return out
 
     def _search_results(self):
         hits = db.search_diary(self.search_text)
-        out = [ft.Text(f"{len(hits)} result{'s' if len(hits) != 1 else ''} for “{self.search_text}”", size=12,
+        out = [ft.Text(trn("{n} result for “{text}”", "{n} results for “{text}”", len(hits), text=self.search_text),
+                       size=12,
                        color=ft.Colors.GREY_400)]
         for h in hits:
             d = date.fromisoformat(h["date"])
-            where = "Page" if h["where"] == "page" else EXERCISE_TITLES.get(h["where"], h["where"])
+            where = tr("Page") if h["where"] == "page" else tr(EXERCISE_TITLES.get(h["where"], h["where"]))
             out.append(ft.Container(
                 content=ft.Column([ft.Text(f"{d:%d/%m/%Y} · {where}", size=11, color=ACCENT),
                                    ft.Text(h["snippet"], size=12)], spacing=2),
@@ -602,23 +609,23 @@ class DiaryView(ft.Row):
     def _render_workspace(self):
         day = self.selected_day
         entry = db.get_diary_entry(day)
-        title = f"{day:%A, %d %B %Y}"
+        title = fmt_long(day)
         controls = [ft.Row([
             ft.Text(title, size=22, weight=ft.FontWeight.BOLD, expand=True),
-            ft.Container(ft.Text("Today", size=11, color=ft.Colors.BLACK, weight=ft.FontWeight.BOLD),
+            ft.Container(ft.Text(tr("Today"), size=11, color=ft.Colors.BLACK, weight=ft.FontWeight.BOLD),
                          bgcolor=ft.Colors.CYAN_ACCENT, border_radius=10,
                          padding=ft.Padding.symmetric(horizontal=8, vertical=2), visible=day == date.today()),
         ])]
         if self.message:
             controls.append(ft.Text(self.message, size=12, color=ft.Colors.GREEN_ACCENT))
 
-        mood_row = ft.Row([ft.Text("Mood", width=60, color=ft.Colors.GREY_400)] + [
-            ft.Container(ft.Text(emoji, size=22), padding=6, border_radius=10, tooltip=label, ink=True,
+        mood_row = ft.Row([ft.Text(tr("Mood"), width=60, color=ft.Colors.GREY_400)] + [
+            ft.Container(ft.Text(emoji, size=22), padding=6, border_radius=10, tooltip=tr(label), ink=True,
                          bgcolor=ft.Colors.with_opacity(0.25, ACCENT) if entry["mood"] == m else None,
                          border=ft.Border.all(1, ACCENT if entry["mood"] == m else ft.Colors.GREY_800),
                          on_click=lambda e, m=m: self._set_mood(m)) for m, emoji, label in MOODS], spacing=6)
-        energy_row = ft.Row([ft.Text("Energy", width=60, color=ft.Colors.GREY_400)] + [
-            ft.Container(ft.Text(f"{n} · {label}", size=11), padding=ft.Padding.symmetric(horizontal=8, vertical=6),
+        energy_row = ft.Row([ft.Text(tr("Energy"), width=60, color=ft.Colors.GREY_400)] + [
+            ft.Container(ft.Text(f"{n} · {tr(label)}", size=11), padding=ft.Padding.symmetric(horizontal=8, vertical=6),
                          border_radius=10, ink=True,
                          bgcolor=ft.Colors.with_opacity(0.25, ACCENT) if entry["energy"] == n else None,
                          border=ft.Border.all(1, ACCENT if entry["energy"] == n else ft.Colors.GREY_800),
@@ -626,13 +633,14 @@ class DiaryView(ft.Row):
 
         self.body_field = ft.TextField(
             value=entry["body"], multiline=True, min_lines=8, max_lines=30, text_size=15,
-            hint_text="What happened today? What's on your mind? Anything goes — it's encrypted and only yours.",
+            hint_text=tr("What happened today? What's on your mind? Anything goes — it's encrypted and only yours."),
             on_change=self._body_changed, on_blur=self._save_body)
         self.body_dirty = False
         save_row = ft.Row([
-            ft.Text(self.save_status or (f"Last saved {entry['updated_at'][11:16]}" if entry["updated_at"] else ""),
+            ft.Text(self.save_status or (tr("Last saved {time}", time=entry["updated_at"][11:16])
+                                         if entry["updated_at"] else ""),
                     size=11, color=ft.Colors.GREY_500, expand=True),
-            ft.Button("Save", icon=ft.Icons.SAVE, data="button", on_click=self._save_body),
+            ft.Button(tr("Save"), icon=ft.Icons.SAVE, data="button", on_click=self._save_body),
         ])
         controls.append(self._card("Today's page" if day == date.today() else "Page",
                                    [mood_row, energy_row, self.body_field, save_row], ft.Icons.AUTO_STORIES))
@@ -641,40 +649,40 @@ class DiaryView(ft.Row):
         note_controls = [ft.Container(
             content=ft.Column([
                 ft.Text(("⭐ " if n["highlight"] else "") + n["habit"] +
-                        (f" · {n['status']}" if n["status"] != "-" else ""), size=12, weight=ft.FontWeight.BOLD,
+                        (f" · {tr(n['status'])}" if n["status"] != "-" else ""), size=12, weight=ft.FontWeight.BOLD,
                         color=ft.Colors.AMBER_200 if n["highlight"] else ft.Colors.GREY_300),
                 ft.Text(n["note"], size=13, selectable=True)], spacing=2),
-            padding=10, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, ink=True, tooltip="Edit note",
+            padding=10, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, ink=True, tooltip=tr("Edit note"),
             on_click=lambda e, n=n: open_habit_note(self.app_page, n["activity_id"], n["habit"], day, n["status"],
                                                     on_saved=self.render)) for n in notes]
         if not note_controls:
-            note_controls = [ft.Text("No habit notes this day. In the Schedule, use ✎ on a habit (or press N) to "
-                                     "write why it mattered.", size=12, color=ft.Colors.GREY_500)]
+            note_controls = [ft.Text(tr("No habit notes this day. In the Schedule, use ✎ on a habit (or press N) to "
+                                     "write why it mattered."), size=12, color=ft.Colors.GREY_500)]
         controls.append(self._card("From the Schedule", note_controls, ft.Icons.CHECKLIST))
 
         exercises = db.get_diary_exercises(day)
-        buttons = ft.Row([ft.OutlinedButton(t, icon=icon, on_click=lambda e, k=k: self.open_exercise(k))
+        buttons = ft.Row([ft.OutlinedButton(tr(t), icon=icon, on_click=lambda e, k=k: self.open_exercise(k))
                           for k, (t, icon, _, _) in EXERCISES.items()], wrap=True, spacing=8, run_spacing=8)
         ex_controls = [buttons]
         for ex in exercises:
             title, icon, _, spec = EXERCISES.get(ex["kind"], (ex["kind"], ft.Icons.NOTES, "", []))
-            labels = {n: lbl for n, lbl, _, _ in spec}
+            labels = {n: tr(lbl) for n, lbl, _, _ in spec}
             lines = [ft.Column([ft.Text(labels.get(k, k), size=11, color=ft.Colors.GREY_400),
                                 ft.Text(v, size=13, selectable=True)], spacing=1)
                      for k, v in ex["fields"].items() if v]
             ex_controls.append(ft.Container(
                 content=ft.Column([
                     ft.Row([ft.Icon(icon, size=16, color=ACCENT),
-                            ft.Text(f"{title} · {ex['created_at'][11:16]}", weight=ft.FontWeight.BOLD, size=13,
+                            ft.Text(f"{tr(title)} · {ex['created_at'][11:16]}", weight=ft.FontWeight.BOLD, size=13,
                                     expand=True),
-                            ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16, tooltip="Edit exercise",
+                            ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16, tooltip=tr("Edit exercise"),
                                           on_click=lambda e, ex=ex: self.open_exercise(ex["kind"], ex)),
-                            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=16, tooltip="Delete exercise",
+                            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=16, tooltip=tr("Delete exercise"),
                                           on_click=lambda e, ex=ex: self._delete_exercise(ex))], spacing=4),
                     *lines], spacing=6),
                 padding=12, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH))
         controls.append(self._card("Guided exercises", ex_controls, ft.Icons.SELF_IMPROVEMENT,
-                                   trailing=ft.Text(f"+{XP_DIARY_EXERCISE:g} XP each", size=11,
+                                   trailing=ft.Text(tr("+{xp} XP each", xp=f"{XP_DIARY_EXERCISE:g}"), size=11,
                                                     color=ft.Colors.GREY_500)))
 
         controls.append(self._reflection_card(entry))
@@ -689,18 +697,18 @@ class DiaryView(ft.Row):
                                 color=ft.Colors.GREY_500))
         if self.ai_busy:
             body.append(ft.Row([ft.ProgressRing(width=16, height=16, stroke_width=2),
-                                ft.Text("Reading your day…", size=12, color=ft.Colors.GREY_400)]))
+                                ft.Text(tr("Reading your day…"), size=12, color=ft.Colors.GREY_400)]))
         if self.ai_error:
             body.append(ft.Text(self.ai_error, size=12, color=ft.Colors.RED_ACCENT))
         if not configured:
-            body.append(ft.Text("Optional: add a Gemini key (Options → AI) to ask for an honest reflection on a day.",
+            body.append(ft.Text(tr("Optional: add a Gemini key (Options → AI) to ask for an honest reflection on a day."),
                                 size=12, color=ft.Colors.GREY_500))
         else:
             body.append(ft.Row([
-                ft.OutlinedButton("Ask for a reflection" if not entry["reflection"] else "Reflect again",
+                ft.OutlinedButton(tr("Ask for a reflection") if not entry["reflection"] else tr("Reflect again"),
                                   icon=ft.Icons.AUTO_AWESOME, disabled=self.ai_busy, on_click=self._ask_reflection),
-                ft.TextButton("Remove", icon=ft.Icons.DELETE_OUTLINE, visible=bool(entry["reflection"]),
+                ft.TextButton(tr("Remove"), icon=ft.Icons.DELETE_OUTLINE, visible=bool(entry["reflection"]),
                               on_click=self._clear_reflection),
-                ft.Text("Sent only when you click.", size=11, color=ft.Colors.GREY_500),
+                ft.Text(tr("Sent only when you click."), size=11, color=ft.Colors.GREY_500),
             ], wrap=True))
         return self._card("Reflection", body, ft.Icons.AUTO_AWESOME)

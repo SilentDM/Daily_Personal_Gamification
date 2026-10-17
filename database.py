@@ -1787,12 +1787,15 @@ def sync_renewal_quests(today: date = None):
         if doc["status"] == "ok" or doc["quest_for"] == doc["expiration_date"]:
             continue
         exp = date.fromisoformat(doc["expiration_date"])
+        from i18n import tr  # lazy: i18n reads its setting from this module
+        check = tr("Check what's needed to renew {type}", type=doc["doc_type"])
         quest_id = add_quest(
-            f"Renew {doc['title']}", quest_type="Side", difficulty="Normal",
-            notes=f"Created automatically: {doc['title']} ({doc['doc_type']}) expires on {exp:%d/%m/%Y}.",
-            next_step=f"Check what's needed to renew {doc['doc_type']}",
-            subquests=[f"Check what's needed to renew {doc['doc_type']}", f"Renew {doc['doc_type']}",
-                       "Press 'Renewed' in Documents with the new date"])
+            tr("Renew {title}", title=doc["title"]), quest_type="Side", difficulty="Normal",
+            notes=tr("Created automatically: {title} ({type}) expires on {date}.", title=doc["title"],
+                     type=doc["doc_type"], date=f"{exp:%d/%m/%Y}"),
+            next_step=check,
+            subquests=[check, tr("Renew {type}", type=doc["doc_type"]),
+                       tr("Press 'Renewed' in Documents with the new date")])
         conn = get_connection()
         conn.execute("UPDATE tracked_documents SET quest_id = ?, quest_for = ? WHERE id = ?",
                      (quest_id, doc["expiration_date"], doc["id"]))

@@ -69,7 +69,7 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 ### 🖼️ 5. Desktop Wallpaper HUD
 * A **modular card** on your wallpaper: turn blocks on/off and reorder them — streak & today's score, level & XP, **insight of the day**, quests, studies & reviews due, upcoming calendar, document alerts (empty blocks hide).
 * **1 or 2 columns**, Compact / Normal / Large size, position and accent color; text **scales with the screen resolution** (sharp on 1440p / 4K).
-* **Insight of the day (Gemini, optional):** one short, kind, specific sentence per day based on your recent habits, quests and studies (Português or English; one call per day).
+* **Insight of the day (Gemini, optional):** one short, kind, specific sentence per day based on your recent habits, quests and studies (in the app language; one call per day).
 * **Backgrounds:** pure black, the project image, or **a new image each day from a folder** you choose — images fill the screen without being stretched.
 * **Live preview** in the tab before applying, and **Pause & restore**: your original wallpaper is kept on the first apply and comes back whenever you pause the HUD.
 
@@ -89,7 +89,8 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 * Uses long polling (no server, no open port). It works while the app is running (it lives in the tray).
 
 ### ⚙️ 8. Options
-* **AI & messages language** (Português / English), **start with Windows**, close-to-tray, auto-update on/off.
+* **Language — Português (Brasil) or English:** the whole program follows it: every screen, the desktop HUD, notifications, the Telegram assistant and what the AI writes. Your data is never translated or changed (answers, categories and stages are stored the same way and only shown in your language); switching asks for a quick restart.
+* **Start with Windows**, close-to-tray, auto-update on/off.
 * **Turn tabs off:** Graphs, Quests, Study, Diary, Wallpaper, Calendar and Documents can be disabled — a disabled tab is **not loaded at all** and its background work stops (restart button included).
 * **Scoring rules:** the passing score (streak / green day) and rest days per habit per week.
 * **Quiet hours**, extra **backup folder**, open the data folder, CSV export, Gemini settings and the whole Telegram setup.
@@ -126,6 +127,8 @@ Daily_Personal_Gamification/
 ├── wallpaper_view.py   # HUD settings screen
 ├── options_view.py     # Options tab: general, tabs on/off, scoring, quiet hours, data, AI, Telegram
 ├── settings.py         # Typed app options with defaults (secrets live in the Credential Manager)
+├── i18n.py             # App language: tr()/trn(), day & month names, date formats
+├── i18n_pt.py          # Portuguese (Brazil) translations (English text in the code -> Portuguese)
 ├── assistant.py        # Telegram assistant: pairing, chat (text/voice) with Gemini tools, check-in buttons
 ├── assistant_tools.py  # What the assistant can read and do (no delete tools, idempotent actions)
 ├── notifier.py         # Proactive messages: briefing, calendar, documents, reviews, check-in, achievements
