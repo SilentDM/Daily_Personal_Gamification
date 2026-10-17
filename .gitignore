@@ -188,3 +188,6 @@ Install.txt
 *.db-shm
 documents.key
 /Background
+
+# ZIP installs (Instalar.bat): commit of the installed files, written by the updater
+.installed_version

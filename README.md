@@ -6,6 +6,28 @@ Transform your daily routines, health habits, and study schedules into an RPG-li
 
 ---
 
+## 💾 Instalação fácil (Windows) / Easy install
+
+**Não precisa saber nada de programação.**
+
+1. **Baixe o programa:** [⬇ Daily_Personal_Gamification-main.zip](https://github.com/SilentDM/Daily_Personal_Gamification/archive/refs/heads/main.zip)
+2. Na pasta Downloads, clique com o **botão direito** no arquivo `.zip` → **Extrair tudo…** → **Extrair**.
+3. Abra a pasta que apareceu e dê **dois cliques em `Instalar.bat`**.
+   - Se o Windows perguntar se quer executar o arquivo, clique em **Executar** (ou em *Mais informações* → *Executar assim mesmo*).
+4. Espere alguns minutos. O instalador faz tudo sozinho:
+   - usa o Python do seu PC, ou instala o Python oficial (python.org) **só para o seu usuário**, sem pedir senha de administrador;
+   - copia o programa para `%LOCALAPPDATA%\Programs\DailyPersonalGamification` e instala as bibliotecas;
+   - cria o atalho **Personal Gamification Tracker** na **Área de Trabalho** e no **Menu Iniciar**, e abre o programa.
+5. Pronto! Depois disso você pode apagar o `.zip` e a pasta extraída.
+
+- **Atualizações:** o programa se atualiza sozinho ao abrir (com internet). Dá para desligar em *Opções*.
+- **Seus dados** ficam em `%APPDATA%\Daily_Personal_Gamification`: reinstalar ou atualizar nunca apaga nada.
+- **Desinstalar:** Menu Iniciar → *Personal Gamification Tracker* → **Desinstalar**. Ele pergunta se você quer manter seus dados.
+
+*English:* download the [ZIP](https://github.com/SilentDM/Daily_Personal_Gamification/archive/refs/heads/main.zip), right-click → *Extract All*, then double-click **`Instalar.bat`**. It installs Python for your user if needed (no admin), the libraries and a desktop shortcut, and opens the app. ZIP installs update themselves from GitHub on start.
+
+---
+
 ## ✨ Features
 
 ### 📅 1. Dynamic Weekly Schedule
@@ -114,7 +136,11 @@ Daily_Personal_Gamification/
 ├── database.py         # SQLite schema & migrations, XP ledger, streaks, backups, CSV export
 ├── secure.py           # Field-level encryption for the documents vault
 ├── applog.py           # Rotating log file in AppData
-├── updater.py          # git fast-forward auto-update on launch
+├── updater.py          # Auto-update on launch: git fast-forward (clones) or the GitHub ZIP (Instalar.bat installs)
+├── Instalar.bat        # Easy installer for non-technical users (runs install.ps1)
+├── Desinstalar.bat     # Uninstaller (asks whether to keep your data)
+├── install.ps1         # Installer logic: Python check/install, venv, libraries, shortcuts
+├── assets/icon.ico     # App / shortcut icon
 ├── schedule_view.py    # Weekly habit grid and gamification banner
 ├── graphs_view.py      # Graphs: period filter, tiles, heatmap, trend, ranking, year map, weekly charts
 ├── analytics.py        # Read-only analytics behind the Graphs tab
@@ -149,7 +175,7 @@ Daily_Personal_Gamification/
 
 ---
 
-## 🚀 Quickstart & Installation
+## 🚀 Quickstart & Installation (developers)
 
 ### 1. Clone the repository
 ```bash

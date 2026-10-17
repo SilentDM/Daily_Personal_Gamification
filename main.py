@@ -109,6 +109,9 @@ def main(page: ft.Page):
     global TRAY_INITIALIZED, tray_icon_instance
 
     page.title = APP_TITLE
+    icon = Path(__file__).resolve().parent / "assets" / "icon.ico"
+    if icon.exists():
+        page.window.icon = str(icon)  # taskbar / title bar icon (same as the desktop shortcut)
     page.theme_mode = ft.ThemeMode.DARK
     page.window.width = 1380
     page.window.height = 860

@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Windows scripts must keep CRLF line endings, also inside the ZIP that GitHub builds (Instalar.bat)
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.ico binary
